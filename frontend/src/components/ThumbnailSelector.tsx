@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { RotateCw, Check, Trash2, ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
+import { getApiUrl } from "@/lib/api";
 
 export interface PageItem {
   page_number: number;
@@ -48,7 +49,7 @@ export default function ThumbnailSelector({
       formData.append("dpi", "60");
 
       try {
-        const res = await fetch("/api/backend/preview/thumbnails", {
+        const res = await fetch(getApiUrl("/api/preview/thumbnails"), {
           method: "POST",
           body: formData,
         });

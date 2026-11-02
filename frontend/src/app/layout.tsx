@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import "./compiled.css";
-import Navbar from "@/components/Navbar";
-import Footer from "@/components/Footer";
+import AppShell from "@/components/AppShell";
 
 export const metadata: Metadata = {
   title: "PDFly - Complete Online PDF Workstation",
@@ -17,9 +16,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="h-full antialiased">
       <body className="min-h-full flex flex-col bg-white text-gray-900">
-        <Navbar />
-        <div className="flex-1">{children}</div>
-        <Footer />
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

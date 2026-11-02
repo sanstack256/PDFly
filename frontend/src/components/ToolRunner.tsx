@@ -9,6 +9,7 @@ import ThumbnailSelector from "@/components/ThumbnailSelector";
 import SignatureModal from "@/components/SignatureModal";
 import PagePlacementCanvas, { RedactBox } from "@/components/PagePlacementCanvas";
 import ToolIcon from "@/components/ToolIcon";
+import { getApiUrl } from "@/lib/api";
 import {
   ArrowLeft,
   Loader2,
@@ -256,8 +257,8 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
           formData.append("file", files[0]);
       }
 
-      // Proxy API request through Next backend rewrite
-      const endpointUrl = `/api/backend${tool.endpoint.replace("/api", "")}`;
+      // Dispatch API request to backend
+      const endpointUrl = getApiUrl(tool.endpoint);
       const res = await fetch(endpointUrl, {
         method: "POST",
         body: formData,

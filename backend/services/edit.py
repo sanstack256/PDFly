@@ -219,13 +219,28 @@ def export_editor_pdf(
                 pass
                 
         if img_bytes:
-            # Handle rotation or opacity if needed
+            # Handle crop or rotation if needed
+            crop = img_item.get("crop")
             rotation = int(img_item.get("rotation", 0)) % 360
-            if rotation != 0:
+            if crop or rotation != 0:
                 try:
                     pil_img = Image.open(io.BytesIO(img_bytes))
-                    # PIL rotate is counter-clockwise, so negative for clockwise
-                    pil_img = pil_img.rotate(-rotation, expand=True)
+                    if crop:
+                        cx = max(0.0, float(crop.get("x", 0)))
+                        cy = max(0.0, float(crop.get("y", 0)))
+                        cw = min(1.0 - cx, float(crop.get("width", 1)))
+                        ch = min(1.0 - cy, float(crop.get("height", 1)))
+                        im_w, im_h = pil_img.size
+                        box = (
+                            int(cx * im_w),
+                            int(cy * im_h),
+                            int((cx + cw) * im_w),
+                            int((cy + ch) * im_h)
+                        )
+                        pil_img = pil_img.crop(box)
+                    if rotation != 0:
+                        # PIL rotate is counter-clockwise, so negative for clockwise
+                        pil_img = pil_img.rotate(-rotation, expand=True)
                     buf = io.BytesIO()
                     pil_img.save(buf, format="PNG")
                     img_bytes = buf.getvalue()

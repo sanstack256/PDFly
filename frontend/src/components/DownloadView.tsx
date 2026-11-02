@@ -3,6 +3,7 @@
 import React from "react";
 import Link from "next/link";
 import { Download, CheckCircle, ArrowRight, RefreshCw, FileText } from "lucide-react";
+import { getDownloadUrl } from "@/lib/api";
 
 interface DownloadViewProps {
   filename: string;
@@ -30,10 +31,8 @@ export default function DownloadView({
     return (bytes / (1024 * 1024)).toFixed(2) + " MB";
   };
 
-  // Convert downloadUrl to point to Next backend proxy
-  const proxyDownloadUrl = downloadUrl.startsWith("/api/download")
-    ? `/api/backend${downloadUrl.replace("/api", "")}`
-    : downloadUrl;
+  // Convert downloadUrl to point to active backend
+  const proxyDownloadUrl = getDownloadUrl(downloadUrl);
 
   return (
     <div className="w-full max-w-xl mx-auto text-center py-12 px-6 bg-white rounded-3xl border border-gray-100 shadow-xl">
