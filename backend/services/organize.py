@@ -277,18 +277,29 @@ def add_watermark(
     for page in doc:
         rect = page.rect
         if watermark_type == "image" and image_path and image_path.exists():
-            img_doc = pymupdf.open(image_path)
-            # Default watermark image size centered
-            w = rect.width * 0.5
-            h = rect.height * 0.3
+            from PIL import Image as PILImage
+            import io
+            with PILImage.open(image_path) as pil_img:
+                pil_img = pil_img.convert("RGBA")
+                if opacity < 1.0:
+                    r_ch, g_ch, b_ch, a_ch = pil_img.split()
+                    a_ch = a_ch.point(lambda p: int(p * max(0.05, min(1.0, opacity))))
+                    pil_img = PILImage.merge("RGBA", (r_ch, g_ch, b_ch, a_ch))
+                if rotation != 0:
+                    pil_img = pil_img.rotate(-rotation, expand=True, resample=PILImage.BICUBIC)
+                
+                buf = io.BytesIO()
+                pil_img.save(buf, format="PNG")
+                img_bytes = buf.getvalue()
+
+            w = min(rect.width * 0.7, rect.height * 0.7)
+            h = w * (pil_img.height / pil_img.width) if pil_img.width > 0 else w
             x0 = (rect.width - w) / 2
             y0 = (rect.height - h) / 2
             target_rect = pymupdf.Rect(x0, y0, x0 + w, y0 + h)
-            page.insert_image(target_rect, filename=str(image_path), keep_proportion=True, overlay=True)
-            img_doc.close()
+            page.insert_image(target_rect, stream=img_bytes, keep_proportion=True, overlay=True)
         else:
             # Text watermark with rotation angle
-            point = pymupdf.Point(rect.width / 2, rect.height / 2)
             text_len = pymupdf.get_text_length(text, fontname="helv", fontsize=font_size)
             pivot = pymupdf.Point(rect.width / 2 - text_len / 4, rect.height / 2)
             mat = pymupdf.Matrix(float(rotation))

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { RotateCw, Check, Trash2, ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
+import { RotateCw, Check, Trash2, ArrowLeft, ArrowRight, Loader2, FileText } from "lucide-react";
 import { getApiUrl } from "@/lib/api";
 
 export interface PageItem {
@@ -21,6 +21,8 @@ interface ThumbnailSelectorProps {
   rotations?: Record<number, number>;
   onRotationsChange?: (rotations: Record<number, number>) => void;
   onPageClick?: (pageNumber: number) => void;
+  badgeText?: string;
+  onPageCountLoaded?: (count: number) => void;
 }
 
 export default function ThumbnailSelector({
@@ -33,6 +35,8 @@ export default function ThumbnailSelector({
   rotations = {},
   onRotationsChange,
   onPageClick,
+  badgeText,
+  onPageCountLoaded,
 }: ThumbnailSelectorProps) {
   const [pages, setPages] = useState<PageItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,6 +47,7 @@ export default function ThumbnailSelector({
     async function loadThumbnails() {
       setLoading(true);
       setError(null);
+
       const formData = new FormData();
       formData.append("file", file);
       formData.append("max_pages", "60");
@@ -53,19 +58,52 @@ export default function ThumbnailSelector({
           method: "POST",
           body: formData,
         });
-        if (!res.ok) {
-          throw new Error("Could not generate page previews.");
+
+        if (res.ok) {
+          const data = await res.json();
+          if (!isCancelled && data.thumbnails && data.thumbnails.length > 0) {
+            setPages(data.thumbnails);
+            if (onPageCountLoaded) onPageCountLoaded(data.thumbnails.length);
+            if (onPageOrderChange && (!pageOrder || pageOrder.length === 0)) {
+              onPageOrderChange(data.thumbnails.map((t: PageItem) => t.page_number));
+            }
+            setLoading(false);
+            return;
+          }
         }
-        const data = await res.json();
-        if (!isCancelled) {
-          setPages(data.thumbnails || []);
-          if (onPageOrderChange && (!pageOrder || pageOrder.length === 0)) {
-            onPageOrderChange((data.thumbnails || []).map((t: PageItem) => t.page_number));
+
+        // Fallback: Query page info
+        const infoRes = await fetch(getApiUrl("/api/preview/info"), {
+          method: "POST",
+          body: formData,
+        });
+        if (infoRes.ok) {
+          const infoData = await infoRes.json();
+          const pCount = infoData.page_count || 1;
+          const fallbackPages: PageItem[] = Array.from({ length: pCount }, (_, i) => ({
+            page_number: i + 1,
+            rotation: 0,
+            thumbnail_data: "",
+          }));
+          if (!isCancelled) {
+            setPages(fallbackPages);
+            if (onPageCountLoaded) onPageCountLoaded(pCount);
+            if (onPageOrderChange && (!pageOrder || pageOrder.length === 0)) {
+              onPageOrderChange(fallbackPages.map((t) => t.page_number));
+            }
+          }
+        } else {
+          // Default minimum 1 page
+          if (!isCancelled) {
+            setPages([{ page_number: 1, rotation: 0, thumbnail_data: "" }]);
+            if (onPageCountLoaded) onPageCountLoaded(1);
           }
         }
       } catch (err: any) {
         if (!isCancelled) {
-          setError(err.message || "Preview failed");
+          // If error, generate at least 1 page so user can still interact
+          setPages([{ page_number: 1, rotation: 0, thumbnail_data: "" }]);
+          if (onPageCountLoaded) onPageCountLoaded(1);
         }
       } finally {
         if (!isCancelled) setLoading(false);
@@ -121,10 +159,6 @@ export default function ThumbnailSelector({
     );
   }
 
-  if (error || pages.length === 0) {
-    return null; // Gracefully continue if previews cannot be rendered
-  }
-
   // Display according to pageOrder if provided
   const orderedPages = pageOrder
     ? pageOrder
@@ -135,7 +169,7 @@ export default function ThumbnailSelector({
   return (
     <div className="w-full">
       <div className="flex items-center justify-between mb-3">
-        <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+        <span className="text-xs font-bold text-gray-600 uppercase tracking-wider">
           Document Pages ({pages.length})
         </span>
         {mode === "select" && onSelectedPagesChange && (
@@ -171,9 +205,9 @@ export default function ThumbnailSelector({
                 if (mode === "select") togglePageSelection(page.page_number);
                 if (onPageClick) onPageClick(page.page_number);
               }}
-              className={`group relative rounded-2xl p-2 bg-white border-2 transition-all cursor-pointer shadow-xs hover:shadow-md ${
+              className={`group relative rounded-2xl p-2.5 bg-white border-2 transition-all cursor-pointer shadow-xs hover:shadow-md ${
                 isSelected
-                  ? "border-red-500 ring-2 ring-red-100"
+                  ? "border-red-500 ring-2 ring-red-100 bg-red-50/20"
                   : "border-gray-200 hover:border-gray-300"
               }`}
             >
@@ -184,14 +218,22 @@ export default function ThumbnailSelector({
                 </span>
 
                 {mode === "select" && (
-                  <div
-                    className={`w-5 h-5 rounded-md flex items-center justify-center transition-all ${
-                      isSelected
-                        ? "bg-red-600 text-white"
-                        : "border border-gray-300 bg-white group-hover:border-red-400"
-                    }`}
-                  >
-                    {isSelected && <Check className="w-3.5 h-3.5" />}
+                  <div className="flex items-center gap-1.5">
+                    {isSelected && badgeText && (
+                      <span className="px-1.5 py-0.5 bg-red-600 text-white text-[9px] font-extrabold rounded tracking-wider uppercase flex items-center gap-0.5 shadow-2xs">
+                        <Trash2 className="w-2.5 h-2.5" />
+                        {badgeText}
+                      </span>
+                    )}
+                    <div
+                      className={`w-5 h-5 rounded-md flex items-center justify-center transition-all ${
+                        isSelected
+                          ? "bg-red-600 text-white shadow-2xs"
+                          : "border border-gray-300 bg-white group-hover:border-red-400"
+                      }`}
+                    >
+                      {isSelected && <Check className="w-3.5 h-3.5" />}
+                    </div>
                   </div>
                 )}
 
@@ -207,14 +249,27 @@ export default function ThumbnailSelector({
                 )}
               </div>
 
-              {/* Page Image */}
-              <div className="aspect-[3/4] w-full bg-gray-50 rounded-lg overflow-hidden flex items-center justify-center border border-gray-100">
-                <img
-                  src={page.thumbnail_data}
-                  alt={`Page ${page.page_number}`}
-                  style={{ transform: `rotate(${currentRotation}deg)` }}
-                  className="max-h-full max-w-full object-contain transition-transform"
-                />
+              {/* Page Image / Thumbnail */}
+              <div className="aspect-[3/4] w-full bg-gray-50 rounded-lg overflow-hidden flex flex-col items-center justify-center border border-gray-100 relative">
+                {page.thumbnail_data ? (
+                  <img
+                    src={page.thumbnail_data}
+                    alt={`Page ${page.page_number}`}
+                    style={{ transform: `rotate(${currentRotation}deg)` }}
+                    className="max-h-full max-w-full object-contain transition-transform"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center justify-center text-gray-400 p-4 text-center">
+                    <FileText className="w-8 h-8 mb-1.5 text-gray-300 stroke-1" />
+                    <span className="text-xs font-bold text-gray-600">Page {page.page_number}</span>
+                    <span className="text-[10px] text-gray-400">PDF Document</span>
+                  </div>
+                )}
+
+                {/* Selected Overlay Indicator */}
+                {isSelected && (
+                  <div className="absolute inset-0 bg-red-500/10 pointer-events-none border-2 border-red-500 rounded-lg" />
+                )}
               </div>
 
               {/* Reorder arrows */}
@@ -246,4 +301,3 @@ export default function ThumbnailSelector({
     </div>
   );
 }
-

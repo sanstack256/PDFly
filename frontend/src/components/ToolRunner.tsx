@@ -20,10 +20,64 @@ import {
   Unlock,
   ShieldAlert,
   Sparkles,
+  Type,
+  Image as ImageIcon,
+  Upload,
+  Eye,
+  Check,
+  Trash2,
 } from "lucide-react";
 
 interface ToolRunnerProps {
   tool: ToolConfig;
+}
+
+function parsePageRanges(input: string, maxPages?: number): number[] {
+  if (!input.trim()) return [];
+  const pagesSet = new Set<number>();
+  const parts = input.split(/[,;\s]+/);
+  for (const part of parts) {
+    if (!part) continue;
+    if (part.includes("-")) {
+      const [startStr, endStr] = part.split("-");
+      const start = parseInt(startStr, 10);
+      const end = parseInt(endStr, 10);
+      if (!isNaN(start) && !isNaN(end)) {
+        const minP = Math.max(1, Math.min(start, end));
+        const maxP = maxPages && maxPages > 0 ? Math.min(maxPages, Math.max(start, end)) : Math.max(start, end);
+        for (let p = minP; p <= maxP; p++) {
+          pagesSet.add(p);
+        }
+      }
+    } else {
+      const p = parseInt(part, 10);
+      if (!isNaN(p) && p >= 1 && (!maxPages || maxPages <= 0 || p <= maxPages)) {
+        pagesSet.add(p);
+      }
+    }
+  }
+  return Array.from(pagesSet).sort((a, b) => a - b);
+}
+
+function formatPageRanges(pages: number[]): string {
+  if (!pages || pages.length === 0) return "";
+  const sorted = [...new Set(pages)].sort((a, b) => a - b);
+  const ranges: string[] = [];
+  let start = sorted[0];
+  let prev = start;
+
+  for (let i = 1; i < sorted.length; i++) {
+    const curr = sorted[i];
+    if (curr === prev + 1) {
+      prev = curr;
+    } else {
+      ranges.push(start === prev ? `${start}` : `${start}-${prev}`);
+      start = curr;
+      prev = curr;
+    }
+  }
+  ranges.push(start === prev ? `${start}` : `${start}-${prev}`);
+  return ranges.join(", ");
 }
 
 export default function ToolRunner({ tool }: ToolRunnerProps) {
@@ -43,15 +97,21 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
   const [splitMode, setSplitMode] = useState<"ranges" | "all">("ranges");
   const [splitRanges, setSplitRanges] = useState("");
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
+  const [manualRemoveInput, setManualRemoveInput] = useState("");
+  const [detectedPageCount, setDetectedPageCount] = useState(1);
   const [pageOrder, setPageOrder] = useState<number[]>([]);
   const [rotations, setRotations] = useState<Record<number, number>>({});
   const [rotateAngle, setRotateAngle] = useState(90);
   const [pageNumberPosition, setPageNumberPosition] = useState("bottom-center");
   const [pageNumberFormat, setPageNumberFormat] = useState("page_of_total");
+  const [watermarkType, setWatermarkType] = useState<"text" | "image">("text");
   const [watermarkText, setWatermarkText] = useState("CONFIDENTIAL");
-  const [watermarkOpacity, setWatermarkOpacity] = useState(0.3);
+  const [watermarkFontSize, setWatermarkFontSize] = useState(48);
+  const [watermarkOpacity, setWatermarkOpacity] = useState(0.35);
   const [watermarkRotation, setWatermarkRotation] = useState(45);
   const [watermarkColor, setWatermarkColor] = useState("#888888");
+  const [watermarkImageFile, setWatermarkImageFile] = useState<File | null>(null);
+  const [watermarkImagePreview, setWatermarkImagePreview] = useState<string | null>(null);
 
   // 2. Optimize
   const [compressionLevel, setCompressionLevel] = useState<"recommended" | "extreme" | "less">("recommended");
@@ -78,6 +138,11 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
     setResult(null);
     setError(null);
     setSelectedPages([]);
+    setManualRemoveInput("");
+    setDetectedPageCount(1);
+    setWatermarkType("text");
+    setWatermarkImageFile(null);
+    setWatermarkImagePreview(null);
     setPageOrder([]);
     setRotations({});
     setRedactions([]);
@@ -152,11 +217,19 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
 
         case "add-watermark":
           formData.append("file", files[0]);
-          formData.append("watermark_type", "text");
-          formData.append("text", watermarkText);
+          formData.append("watermark_type", watermarkType);
+          if (watermarkType === "image") {
+            if (!watermarkImageFile) {
+              throw new Error("Please upload an image or logo for the watermark.");
+            }
+            formData.append("watermark_image", watermarkImageFile);
+          } else {
+            formData.append("text", watermarkText || "CONFIDENTIAL");
+            formData.append("font_size", String(watermarkFontSize));
+            formData.append("color", watermarkColor);
+          }
           formData.append("opacity", String(watermarkOpacity));
           formData.append("rotation", String(watermarkRotation));
-          formData.append("color", watermarkColor);
           break;
 
         case "compress-pdf":
@@ -376,15 +449,103 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
               )}
 
               {tool.id === "remove-pages" && isPdf && (
-                <div className="space-y-4">
-                  <p className="text-xs text-gray-500">
-                    Click the pages you wish to delete. Selected pages ({selectedPages.length}) will be removed.
-                  </p>
+                <div className="space-y-6">
+                  {/* Manual input and selection summary */}
+                  <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4 sm:p-5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+                      <div>
+                        <label className="block text-xs font-bold text-gray-800 uppercase tracking-wider mb-1">
+                          Pages to remove:
+                        </label>
+                        <p className="text-xs text-gray-500">
+                          Type page numbers or click the thumbnail cards below.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const all = Array.from({ length: detectedPageCount }, (_, i) => i + 1);
+                            setSelectedPages(all);
+                            setManualRemoveInput(formatPageRanges(all));
+                          }}
+                          className="px-2.5 py-1 text-xs font-semibold bg-white border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-100 transition-colors shadow-2xs"
+                        >
+                          Select All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const odd = Array.from({ length: detectedPageCount }, (_, i) => i + 1).filter((p) => p % 2 !== 0);
+                            setSelectedPages(odd);
+                            setManualRemoveInput(formatPageRanges(odd));
+                          }}
+                          className="px-2.5 py-1 text-xs font-semibold bg-white border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-100 transition-colors shadow-2xs"
+                        >
+                          Odd Pages
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const even = Array.from({ length: detectedPageCount }, (_, i) => i + 1).filter((p) => p % 2 === 0);
+                            setSelectedPages(even);
+                            setManualRemoveInput(formatPageRanges(even));
+                          }}
+                          className="px-2.5 py-1 text-xs font-semibold bg-white border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-100 transition-colors shadow-2xs"
+                        >
+                          Even Pages
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedPages([]);
+                            setManualRemoveInput("");
+                          }}
+                          className="px-2.5 py-1 text-xs font-semibold bg-white border border-gray-300 rounded-lg text-red-600 hover:bg-red-50 transition-colors shadow-2xs"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="e.g. 1, 3, 5-8"
+                        value={manualRemoveInput}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setManualRemoveInput(val);
+                          const parsed = parsePageRanges(val, detectedPageCount);
+                          setSelectedPages(parsed);
+                        }}
+                        className="w-full px-4 py-2.5 rounded-xl border border-gray-300 bg-white text-sm font-medium focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none placeholder:text-gray-400"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between mt-3 text-xs">
+                      <span className="font-semibold text-gray-700">
+                        Total Document Pages: <span className="font-bold text-gray-900">{detectedPageCount}</span>
+                      </span>
+                      <span className={`font-bold ${selectedPages.length > 0 ? "text-red-600" : "text-gray-400"}`}>
+                        {selectedPages.length > 0
+                          ? `${selectedPages.length} ${selectedPages.length === 1 ? "page" : "pages"} marked for removal`
+                          : "No pages selected"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Thumbnail Cards Grid */}
                   <ThumbnailSelector
                     file={files[0]}
                     mode="select"
                     selectedPages={selectedPages}
-                    onSelectedPagesChange={setSelectedPages}
+                    onSelectedPagesChange={(newPages) => {
+                      setSelectedPages(newPages);
+                      setManualRemoveInput(formatPageRanges(newPages));
+                    }}
+                    badgeText="REMOVE"
+                    onPageCountLoaded={(cnt) => setDetectedPageCount(cnt)}
                   />
                 </div>
               )}
@@ -480,44 +641,255 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
               )}
 
               {tool.id === "add-watermark" && isPdf && (
-                <div className="space-y-4 max-w-xl">
-                  <div>
-                    <label className="block text-xs font-bold text-gray-700 mb-1">Watermark Text</label>
-                    <input
-                      type="text"
-                      value={watermarkText}
-                      onChange={(e) => setWatermarkText(e.target.value)}
-                      className="w-full px-4 py-2.5 rounded-xl border border-gray-300 text-sm outline-none focus:border-red-500"
-                    />
+                <div className="space-y-6">
+                  {/* Mode switcher: Text vs Image */}
+                  <div className="flex items-center p-1 bg-gray-100 rounded-xl max-w-sm">
+                    <button
+                      type="button"
+                      onClick={() => setWatermarkType("text")}
+                      className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
+                        watermarkType === "text"
+                          ? "bg-white text-gray-900 shadow-xs"
+                          : "text-gray-600 hover:text-gray-900"
+                      }`}
+                    >
+                      <Type className="w-3.5 h-3.5" />
+                      Text Watermark
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setWatermarkType("image")}
+                      className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
+                        watermarkType === "image"
+                          ? "bg-white text-gray-900 shadow-xs"
+                          : "text-gray-600 hover:text-gray-900"
+                      }`}
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      Image / Logo
+                    </button>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-gray-700 mb-1">
-                        Rotation Angle ({watermarkRotation}°)
-                      </label>
-                      <input
-                        type="range"
-                        min="0"
-                        max="360"
-                        step="15"
-                        value={watermarkRotation}
-                        onChange={(e) => setWatermarkRotation(Number(e.target.value))}
-                        className="w-full"
-                      />
+
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                    {/* Controls Column (left 7 cols) */}
+                    <div className="lg:col-span-7 space-y-5">
+                      {watermarkType === "text" ? (
+                        <>
+                          <div>
+                            <div className="flex items-center justify-between mb-1.5">
+                              <label className="text-xs font-bold text-gray-700">Watermark Text</label>
+                              <div className="flex items-center gap-1">
+                                {["CONFIDENTIAL", "DRAFT", "DO NOT COPY", "SAMPLE"].map((preset) => (
+                                  <button
+                                    key={preset}
+                                    type="button"
+                                    onClick={() => setWatermarkText(preset)}
+                                    className="text-[10px] font-semibold text-gray-500 bg-gray-100 hover:bg-gray-200 px-1.5 py-0.5 rounded transition-colors"
+                                  >
+                                    {preset}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            <input
+                              type="text"
+                              value={watermarkText}
+                              onChange={(e) => setWatermarkText(e.target.value)}
+                              placeholder="Type watermark text..."
+                              className="w-full px-4 py-2.5 rounded-xl border border-gray-300 text-sm outline-none focus:border-red-500"
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <label className="text-xs font-bold text-gray-700">Font Size ({watermarkFontSize}px)</label>
+                              </div>
+                              <input
+                                type="range"
+                                min="16"
+                                max="96"
+                                step="2"
+                                value={watermarkFontSize}
+                                onChange={(e) => setWatermarkFontSize(Number(e.target.value))}
+                                className="w-full accent-red-600"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-gray-700 mb-1">Watermark Color</label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="color"
+                                  value={watermarkColor}
+                                  onChange={(e) => setWatermarkColor(e.target.value)}
+                                  className="w-8 h-8 rounded-lg cursor-pointer border border-gray-300 p-0.5"
+                                />
+                                <div className="flex items-center gap-1">
+                                  {["#888888", "#DC2626", "#1D4ED8", "#059669", "#111827"].map((c) => (
+                                    <button
+                                      key={c}
+                                      type="button"
+                                      onClick={() => setWatermarkColor(c)}
+                                      style={{ backgroundColor: c }}
+                                      className={`w-5 h-5 rounded-full border ${
+                                        watermarkColor === c ? "ring-2 ring-red-400 ring-offset-1" : "border-gray-200"
+                                      }`}
+                                      title={c}
+                                    />
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="space-y-4">
+                          <div>
+                            <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                              Upload Logo / Stamp Image (PNG, JPG, SVG)
+                            </label>
+                            <label className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-gray-300 rounded-2xl hover:border-red-500 cursor-pointer bg-gray-50/50 hover:bg-red-50/20 transition-all">
+                              <Upload className="w-6 h-6 text-gray-400 mb-2" />
+                              <span className="text-xs font-bold text-gray-700">
+                                {watermarkImageFile ? watermarkImageFile.name : "Click to select logo / stamp image"}
+                              </span>
+                              <span className="text-[10px] text-gray-400 mt-1">
+                                Transparent PNG recommended for best results
+                              </span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0];
+                                  if (f) {
+                                    setWatermarkImageFile(f);
+                                    const reader = new FileReader();
+                                    reader.onload = () => {
+                                      setWatermarkImagePreview(reader.result as string);
+                                    };
+                                    reader.readAsDataURL(f);
+                                  }
+                                }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Common sliders for both text and image */}
+                      <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-100">
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-xs font-bold text-gray-700">
+                              Rotation Angle ({watermarkRotation}°)
+                            </label>
+                            <div className="flex items-center gap-1">
+                              {[0, 45, 90].map((deg) => (
+                                <button
+                                  key={deg}
+                                  type="button"
+                                  onClick={() => setWatermarkRotation(deg)}
+                                  className={`text-[10px] font-semibold px-1.5 py-0.5 rounded transition-colors ${
+                                    watermarkRotation === deg
+                                      ? "bg-red-600 text-white"
+                                      : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                                  }`}
+                                >
+                                  {deg}°
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="360"
+                            step="15"
+                            value={watermarkRotation}
+                            onChange={(e) => setWatermarkRotation(Number(e.target.value))}
+                            className="w-full accent-red-600"
+                          />
+                        </div>
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-xs font-bold text-gray-700">
+                              Opacity ({Math.round(watermarkOpacity * 100)}%)
+                            </label>
+                          </div>
+                          <input
+                            type="range"
+                            min="0.1"
+                            max="1.0"
+                            step="0.05"
+                            value={watermarkOpacity}
+                            onChange={(e) => setWatermarkOpacity(Number(e.target.value))}
+                            className="w-full accent-red-600"
+                          />
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-xs font-bold text-gray-700 mb-1">
-                        Opacity ({Math.round(watermarkOpacity * 100)}%)
-                      </label>
-                      <input
-                        type="range"
-                        min="0.1"
-                        max="1.0"
-                        step="0.05"
-                        value={watermarkOpacity}
-                        onChange={(e) => setWatermarkOpacity(Number(e.target.value))}
-                        className="w-full"
-                      />
+
+                    {/* Live Preview Column (right 5 cols) */}
+                    <div className="lg:col-span-5 bg-gray-50 border border-gray-200 rounded-2xl p-5 flex flex-col items-center">
+                      <div className="flex items-center justify-between w-full mb-3">
+                        <span className="text-xs font-bold text-gray-700 flex items-center gap-1.5">
+                          <Eye className="w-3.5 h-3.5 text-red-500" />
+                          Live Document Preview
+                        </span>
+                        <span className="text-[10px] text-gray-400">Updates in real time</span>
+                      </div>
+
+                      {/* Simulated PDF Page */}
+                      <div className="relative w-full max-w-[240px] aspect-[1/1.414] bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden flex items-center justify-center p-4 select-none">
+                        {/* Page simulated contents */}
+                        <div className="absolute inset-x-4 top-4 space-y-2 opacity-25 pointer-events-none">
+                          <div className="h-2.5 bg-gray-400 rounded w-2/3" />
+                          <div className="h-1.5 bg-gray-300 rounded w-full" />
+                          <div className="h-1.5 bg-gray-300 rounded w-5/6" />
+                          <div className="h-1.5 bg-gray-300 rounded w-4/5" />
+                          <div className="h-1.5 bg-gray-300 rounded w-full" />
+                          <div className="h-1.5 bg-gray-300 rounded w-3/4" />
+                          <div className="h-1.5 bg-gray-300 rounded w-5/6" />
+                        </div>
+                        <div className="absolute inset-x-4 bottom-4 space-y-1.5 opacity-20 pointer-events-none">
+                          <div className="h-1.5 bg-gray-300 rounded w-full" />
+                          <div className="h-1.5 bg-gray-300 rounded w-4/5" />
+                          <div className="h-1.5 bg-gray-300 rounded w-2/3" />
+                        </div>
+
+                        {/* Stamped Watermark Layer */}
+                        <div
+                          style={{
+                            transform: `rotate(${watermarkRotation}deg)`,
+                            opacity: watermarkOpacity,
+                            color: watermarkColor,
+                            fontSize: `${Math.round(watermarkFontSize * 0.42)}px`,
+                            transition: "transform 0.1s ease-out, opacity 0.1s ease-out",
+                          }}
+                          className="font-black text-center whitespace-nowrap z-10 pointer-events-none tracking-widest max-w-[260px] truncate"
+                        >
+                          {watermarkType === "text" ? (
+                            watermarkText || "WATERMARK"
+                          ) : watermarkImagePreview ? (
+                            <img
+                              src={watermarkImagePreview}
+                              alt="Watermark preview"
+                              className="max-h-24 max-w-32 object-contain"
+                            />
+                          ) : (
+                            <div className="border border-dashed border-gray-400 rounded p-2 text-[10px] text-gray-500">
+                              Upload Logo
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <p className="text-[11px] text-gray-500 text-center mt-3">
+                        {watermarkType === "text"
+                          ? `Text "${watermarkText || "WATERMARK"}" stamped at ${watermarkRotation}° (${Math.round(watermarkOpacity * 100)}% opacity)`
+                          : `Image logo stamped at ${watermarkRotation}° (${Math.round(watermarkOpacity * 100)}% opacity)`}
+                      </p>
                     </div>
                   </div>
                 </div>

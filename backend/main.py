@@ -18,7 +18,7 @@ from services.convert import (
     jpg_to_pdf, office_to_pdf, html_to_pdf,
     pdf_to_jpg, pdf_to_word, pdf_to_pptx, pdf_to_excel, pdf_to_pdfa
 )
-from services.edit import export_editor_pdf, PAGE_SIZES
+from services.edit import export_editor_pdf, extract_pdf_content, PAGE_SIZES
 from services.security import protect_pdf, unlock_pdf, sign_pdf, redact_pdf
 from services.preview import get_pdf_info, generate_page_thumbnails
 
@@ -567,6 +567,22 @@ async def handle_export_editor_pdf(
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/edit/extract-content")
+async def handle_extract_content(
+    file: UploadFile = File(...),
+    max_pages: int = Form(50)
+):
+    job_dir = create_job_dir()
+    file_path = await save_upload(file, job_dir)
+    try:
+        content = extract_pdf_content(file_path, max_pages=max_pages)
+        return {
+            "success": True,
+            **content
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to extract document content: {str(e)}")
 
 @app.post("/api/edit/create-blank")
 async def handle_create_blank(

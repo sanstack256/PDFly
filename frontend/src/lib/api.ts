@@ -11,9 +11,17 @@ export function getApiUrl(endpoint: string): string {
     return `${process.env.NEXT_PUBLIC_API_URL}${cleanPath}`;
   }
 
-  // Use direct backend port in browser localhost if Next proxy rewrite has any issues
-  // But by default, use /api/backend rewrite proxy
-  return `/api/backend${cleanPath.replace(/^\/api/, "")}`;
+  // When running in the browser, connect directly to FastAPI backend on port 8000.
+  // This completely bypasses the Next.js rewrite proxy's 10MB body limit, socket
+  // hangup, and streaming bottlenecks for large PDFs and processing jobs.
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname || "localhost";
+    const apiPath = cleanPath.startsWith("/api") ? cleanPath : `/api${cleanPath}`;
+    return `http://${host}:8000${apiPath}`;
+  }
+
+  const apiPath = cleanPath.startsWith("/api") ? cleanPath : `/api${cleanPath}`;
+  return `http://127.0.0.1:8000${apiPath}`;
 }
 
 export function getDownloadUrl(downloadUrl: string): string {
@@ -22,3 +30,5 @@ export function getDownloadUrl(downloadUrl: string): string {
   }
   return getApiUrl(downloadUrl);
 }
+
+

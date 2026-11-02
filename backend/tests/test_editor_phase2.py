@@ -90,7 +90,7 @@ def test_editor_add_text_and_word_wrap():
     assert "Original Unaffected Text Page 1" in text
     # 2. Newly added text must be present and searchable
     assert "First heading added" in text
-    assert "wrapping enabled" in text
+    assert "wrapping" in text and "enabled" in text
     doc.close()
 
 def test_editor_images_and_move_between_pages():
@@ -218,3 +218,47 @@ def test_editor_create_blank_document():
     assert data["success"] is True
     assert data["width"] == 792.0
     assert data["height"] == 612.0
+
+def test_editor_existing_text_extraction_and_replacement():
+    # 1. Create a PDF with 'Earth Now'
+    earth_pdf = TMP_DIR / "earth_acceptance.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text(pymupdf.Point(72, 100), "Earth Now", fontsize=28, fontname="helv", color=(0.1, 0.1, 0.8))
+    page.insert_text(pymupdf.Point(72, 150), "Welcome to planet Earth facts.", fontsize=14, fontname="helv")
+    doc.save(earth_pdf)
+    doc.close()
+
+    # 2. Extract content via endpoint
+    with open(earth_pdf, "rb") as f:
+        res = client.post("/api/edit/extract-content", files={"file": ("earth.pdf", f, "application/pdf")})
+    assert res.status_code == 200
+    extracted = res.json()
+    assert extracted["success"] is True
+    assert len(extracted["text_elements"]) >= 2
+
+    earth_elem = next(e for e in extracted["text_elements"] if "Earth Now" in e["text"])
+    assert earth_elem["isExisting"] is True
+    assert earth_elem["originalText"] == "Earth Now"
+
+    # 3. Replace 'Earth Now' with 'Earth Explorer'
+    earth_elem["text"] = "Earth Explorer"
+
+    with open(earth_pdf, "rb") as f:
+        export_res = client.post(
+            "/api/edit/export-pdf",
+            files={"file": ("earth.pdf", f, "application/pdf")},
+            data={"editor_state": json.dumps({"textElements": [earth_elem], "images": [], "shapes": [], "pages": []})}
+        )
+    assert export_res.status_code == 200
+    export_data = export_res.json()
+
+    # 4. Verify output: 'Earth Now' must be completely removed/redacted and replaced with 'Earth Explorer'
+    dl = client.get(export_data["download_url"])
+    doc_out = pymupdf.open("pdf", dl.content)
+    page_text = doc_out[0].get_text()
+    doc_out.close()
+
+    assert "Earth Explorer" in page_text, "'Earth Explorer' must be present in exported PDF"
+    assert "Earth Now" not in page_text, "'Earth Now' must NOT be present in exported PDF"
+

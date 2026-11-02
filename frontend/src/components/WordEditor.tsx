@@ -80,6 +80,10 @@ export interface EditorTextElement {
   listType?: "bullet" | "numbered" | "none";
   zIndex: number;
   fixedHeight?: boolean;
+  isExisting?: boolean;
+  originalText?: string;
+  originalBbox?: number[];
+  isOcr?: boolean;
 }
 
 export interface EditorImageCrop {
@@ -104,6 +108,8 @@ export interface EditorImageElement {
   opacity: number;
   crop?: EditorImageCrop;
   zIndex: number;
+  isExisting?: boolean;
+  originalBbox?: number[];
 }
 
 export interface EditorShapeElement {
@@ -119,6 +125,8 @@ export interface EditorShapeElement {
   fillColor?: string;
   strokeWidth: number;
   zIndex: number;
+  isExisting?: boolean;
+  originalBbox?: number[];
 }
 
 export type EditorElement = EditorTextElement | EditorImageElement | EditorShapeElement;
@@ -173,6 +181,7 @@ export default function WordEditor({ initialFile, initialBlankSize = "A4" }: Wor
   const [elements, setElements] = useState<EditorElement[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
+  const [deletedOriginalBboxes, setDeletedOriginalBboxes] = useState<{ page: number; bbox: number[] }[]>([]);
 
   // History for Undo / Redo
   const [history, setHistory] = useState<{ pages: EditorPage[]; elements: EditorElement[] }[]>([]);
@@ -304,32 +313,23 @@ export default function WordEditor({ initialFile, initialBlankSize = "A4" }: Wor
 
   const loadExistingPdf = async (file: File) => {
     setIsExporting(true);
-    setExportStatusText("Analyzing PDF document structure...");
-    setExportProgress(20);
+    setExportStatusText("Extracting PDF text, layout, and images...");
+    setExportProgress(25);
     try {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("max_pages", "60");
-      formData.append("dpi", "72");
 
-      const [infoRes, thumbRes] = await Promise.all([
-        fetch(getApiUrl("/api/preview/info"), { method: "POST", body: formData }),
-        fetch(getApiUrl("/api/preview/thumbnails"), { method: "POST", body: formData }),
-      ]);
+      const res = await fetch(getApiUrl("/api/edit/extract-content"), {
+        method: "POST",
+        body: formData,
+      });
 
-      if (!infoRes.ok) throw new Error("Could not inspect document pages.");
-      const infoData = await infoRes.json();
-      const thumbData = thumbRes.ok ? await thumbRes.json() : { thumbnails: [] };
+      if (!res.ok) throw new Error("Could not extract document content.");
+      const data = await res.json();
+      setExportProgress(80);
 
-      setExportProgress(70);
-
-      const thumbsMap = (thumbData.thumbnails || []).reduce((acc: any, t: any) => {
-        acc[t.page_number] = t.thumbnail_data;
-        return acc;
-      }, {});
-
-      const loadedPages: EditorPage[] = (infoData.pages || []).map((p: any) => {
-        // Detect closest standard size
+      const loadedPages: EditorPage[] = (data.pages || []).map((p: any) => {
         let detectedSize = "Custom";
         for (const [sName, [sw, sh]] of Object.entries(PAGE_SIZE_PRESETS)) {
           if (Math.abs(p.width - sw) < 10 && Math.abs(p.height - sh) < 10) {
@@ -337,36 +337,38 @@ export default function WordEditor({ initialFile, initialBlankSize = "A4" }: Wor
             break;
           }
         }
-
         return {
-          id: `page-${p.page_number}`,
-          pageNumber: p.page_number,
-          sourceIndex: p.page_number,
-          width: p.width,
-          height: p.height,
+          ...p,
           sizeName: detectedSize,
-          rotation: p.rotation || 0,
-          backgroundColor: "#ffffff",
-          border: { enabled: false, thickness: 2, color: "#000000", style: "solid", margin: 20 },
-          thumbnail: thumbsMap[p.page_number],
         };
       });
+
+      const loadedElements: EditorElement[] = [
+        ...(data.text_elements || []),
+        ...(data.image_elements || []),
+      ];
 
       if (loadedPages.length === 0) {
         createInitialBlank("A4");
       } else {
         setPages(loadedPages);
-        setElements([]);
+        setElements(loadedElements);
         setSelectedIds([]);
         setEditingTextId(null);
-        setHistory([{ pages: loadedPages, elements: [] }]);
+        setDeletedOriginalBboxes([]);
+        setHistory([{ pages: loadedPages, elements: loadedElements }]);
         setHistoryIndex(0);
         setHasUnsavedChanges(false);
         setSaveStatus("saved");
       }
-      showToast(`Loaded ${loadedPages.length} page${loadedPages.length === 1 ? "" : "s"} successfully.`);
+
+      if (data.has_scanned_ocr) {
+        showToast("Scanned document detected: Text recognized via OCR and made editable!");
+      } else {
+        showToast(`Extracted ${loadedElements.length} editable elements across ${loadedPages.length} page(s).`);
+      }
     } catch (err: any) {
-      showToast("Could not load PDF thumbnails; creating blank canvas.");
+      showToast("Could not extract PDF content; creating blank canvas.");
       createInitialBlank("A4");
     } finally {
       setIsExporting(false);
@@ -732,6 +734,13 @@ export default function WordEditor({ initialFile, initialBlankSize = "A4" }: Wor
 
   const deleteSelected = () => {
     if (selectedIds.length === 0) return;
+    const toDelete = elements.filter((el) => selectedIds.includes(el.id));
+    const newDeletedBboxes = toDelete
+      .filter((el: any) => el.isExisting && el.originalBbox)
+      .map((el: any) => ({ page: el.page, bbox: el.originalBbox }));
+    if (newDeletedBboxes.length > 0) {
+      setDeletedOriginalBboxes((prev) => [...prev, ...newDeletedBboxes]);
+    }
     const nextElements = elements.filter((el) => !selectedIds.includes(el.id));
     setElements(nextElements);
     setSelectedIds([]);
@@ -1252,6 +1261,7 @@ export default function WordEditor({ initialFile, initialBlankSize = "A4" }: Wor
         textElements: validTextElements,
         images: elements.filter((e) => e.type === "image"),
         shapes: elements.filter((e) => e.type === "shape"),
+        deletedOriginalBboxes: deletedOriginalBboxes,
       };
 
       setExportProgress(45);
