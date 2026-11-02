@@ -3,6 +3,7 @@ import json
 import base64
 from pathlib import Path
 from typing import List, Optional
+import pymupdf
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +18,7 @@ from services.convert import (
     jpg_to_pdf, office_to_pdf, html_to_pdf,
     pdf_to_jpg, pdf_to_word, pdf_to_pptx, pdf_to_excel, pdf_to_pdfa
 )
-from services.edit import apply_pdf_edits
+from services.edit import export_editor_pdf, PAGE_SIZES
 from services.security import protect_pdf, unlock_pdf, sign_pdf, redact_pdf
 from services.preview import get_pdf_info, generate_page_thumbnails
 
@@ -507,31 +508,56 @@ async def handle_pdf_to_pdfa(
 # ---------------- 5. EDIT PDF ----------------
 
 @app.post("/api/edit/apply-edits")
-async def handle_apply_edits(
-    file: UploadFile = File(...),
-    edits: str = Form(...), # JSON string array
-    images: List[UploadFile] = File([])
+@app.post("/api/edit/export-pdf")
+async def handle_export_editor_pdf(
+    file: Optional[UploadFile] = File(None),
+    edits: Optional[str] = Form(None),
+    editor_state: Optional[str] = Form(None),
+    images: List[UploadFile] = File([]),
+    image_files: List[UploadFile] = File([])
 ):
     job_dir = create_job_dir()
-    file_path = await save_upload(file, job_dir)
-    
-    # Save attached images if any
-    saved_images = {}
-    for img in images:
+    file_path = None
+    if file and file.filename:
+        file_path = await save_upload(file, job_dir)
+
+    all_images = images + image_files
+    image_map = {}
+    for img in all_images:
         if img.filename:
-            img_p = await save_upload(img, job_dir)
-            saved_images[img.filename] = str(img_p)
-            
-    out_file = job_dir / "edited_document.pdf"
+            p = await save_upload(img, job_dir)
+            image_map[img.filename] = p
+
+    state_json = editor_state or edits or "{}"
     try:
-        edit_list = json.loads(edits)
-        for edit in edit_list:
-            if edit.get("type") == "image":
-                name = edit.get("image_name")
-                if name in saved_images:
-                    edit["image_path"] = saved_images[name]
-                    
-        apply_pdf_edits(file_path, edit_list, out_file)
+        raw_state = json.loads(state_json)
+        # Adapt legacy edits format if sent as a list
+        if isinstance(raw_state, list):
+            text_elems = []
+            img_elems = []
+            shape_elems = []
+            pages_list = []
+            for item in raw_state:
+                t = item.get("type")
+                if t == "text":
+                    text_elems.append(item)
+                elif t == "image":
+                    img_elems.append(item)
+                elif t in ("shape", "annotation"):
+                    shape_elems.append(item)
+                elif t == "rotate":
+                    pages_list.append({"page": item.get("page", 1), "rotation": item.get("angle", 90)})
+            state_dict = {
+                "textElements": text_elems,
+                "images": img_elems,
+                "shapes": shape_elems,
+                "pages": pages_list
+            }
+        else:
+            state_dict = raw_state
+
+        out_file = job_dir / "edited_document.pdf"
+        export_editor_pdf(file_path, state_dict, image_map, out_file)
         return {
             "success": True,
             "filename": out_file.name,
@@ -541,6 +567,36 @@ async def handle_apply_edits(
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/edit/create-blank")
+async def handle_create_blank(
+    size: str = Form("A4"),
+    orientation: str = Form("portrait")
+):
+    job_dir = create_job_dir()
+    dims = PAGE_SIZES.get(size, PAGE_SIZES["A4"])
+    w, h = dims
+    if orientation == "landscape":
+        w, h = max(w, h), min(w, h)
+    else:
+        w, h = min(w, h), max(w, h)
+
+    doc = pymupdf.open()
+    doc.new_page(width=w, height=h)
+    out_file = job_dir / "new_document.pdf"
+    doc.save(out_file)
+    doc.close()
+
+    return {
+        "success": True,
+        "filename": out_file.name,
+        "download_url": f"/api/download/{job_dir.name}/{out_file.name}",
+        "job_id": job_dir.name,
+        "width": w,
+        "height": h,
+        "size": size,
+        "orientation": orientation
+    }
 
 # ---------------- 6. PDF SECURITY ----------------
 
