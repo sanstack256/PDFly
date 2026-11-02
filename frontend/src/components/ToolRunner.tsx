@@ -1,0 +1,797 @@
+"use client";
+
+import React, { useState } from "react";
+import Link from "next/link";
+import { ToolConfig } from "@/lib/tools";
+import FileUploadZone from "@/components/FileUploadZone";
+import DownloadView from "@/components/DownloadView";
+import ThumbnailSelector from "@/components/ThumbnailSelector";
+import SignatureModal from "@/components/SignatureModal";
+import PagePlacementCanvas, { RedactBox } from "@/components/PagePlacementCanvas";
+import ToolIcon from "@/components/ToolIcon";
+import {
+  ArrowLeft,
+  Loader2,
+  AlertCircle,
+  Settings,
+  PenTool,
+  Lock,
+  Unlock,
+  ShieldAlert,
+  Sparkles,
+} from "lucide-react";
+
+interface ToolRunnerProps {
+  tool: ToolConfig;
+}
+
+export default function ToolRunner({ tool }: ToolRunnerProps) {
+  const [files, setFiles] = useState<File[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{
+    filename: string;
+    download_url: string;
+    file_size?: number;
+    original_size?: number;
+    savings_percent?: number;
+  } | null>(null);
+
+  // Tool specific configurations
+  // 1. Organize
+  const [splitMode, setSplitMode] = useState<"ranges" | "all">("ranges");
+  const [splitRanges, setSplitRanges] = useState("");
+  const [selectedPages, setSelectedPages] = useState<number[]>([]);
+  const [pageOrder, setPageOrder] = useState<number[]>([]);
+  const [rotations, setRotations] = useState<Record<number, number>>({});
+  const [rotateAngle, setRotateAngle] = useState(90);
+  const [pageNumberPosition, setPageNumberPosition] = useState("bottom-center");
+  const [pageNumberFormat, setPageNumberFormat] = useState("page_of_total");
+  const [watermarkText, setWatermarkText] = useState("CONFIDENTIAL");
+  const [watermarkOpacity, setWatermarkOpacity] = useState(0.3);
+  const [watermarkRotation, setWatermarkRotation] = useState(45);
+  const [watermarkColor, setWatermarkColor] = useState("#888888");
+
+  // 2. Optimize
+  const [compressionLevel, setCompressionLevel] = useState<"recommended" | "extreme" | "less">("recommended");
+  const [ocrLanguage, setOcrLanguage] = useState("eng");
+
+  // 3. Convert
+  const [pageSize, setPageSize] = useState("A4");
+  const [pageOrientation, setPageOrientation] = useState("auto");
+  const [pdfaVersion, setPdfaVersion] = useState("2");
+
+  // 4. Security & Edit
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
+  const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
+  const [signaturePos, setSignaturePos] = useState<{ x: number; y: number; width: number; height: number; page: number } | null>(null);
+  const [activePlacementPage, setActivePlacementPage] = useState<number>(1);
+  const [redactions, setRedactions] = useState<RedactBox[]>([]);
+  const [editText, setEditText] = useState("");
+  const [editColor, setEditColor] = useState("#0000FF");
+
+  const handleReset = () => {
+    setFiles([]);
+    setResult(null);
+    setError(null);
+    setSelectedPages([]);
+    setPageOrder([]);
+    setRotations({});
+    setRedactions([]);
+    setSignatureDataUrl(null);
+    setSignaturePos(null);
+    setPassword("");
+    setConfirmPassword("");
+  };
+
+  const handleProcess = async () => {
+    if (files.length === 0) return;
+    setError(null);
+    setLoading(true);
+
+    try {
+      const formData = new FormData();
+
+      // Tool-specific parameter assembly
+      switch (tool.id) {
+        case "merge-pdf":
+          if (files.length < 2) {
+            throw new Error("Please upload at least 2 PDF files to merge.");
+          }
+          files.forEach((f) => formData.append("files", f));
+          break;
+
+        case "split-pdf":
+          formData.append("file", files[0]);
+          formData.append("split_mode", splitMode);
+          if (splitMode === "ranges" && splitRanges.trim()) {
+            formData.append("ranges", splitRanges);
+          }
+          break;
+
+        case "remove-pages":
+          formData.append("file", files[0]);
+          if (selectedPages.length === 0) {
+            throw new Error("Please select at least one page to remove.");
+          }
+          formData.append("pages", selectedPages.join(","));
+          break;
+
+        case "extract-pages":
+          formData.append("file", files[0]);
+          if (selectedPages.length === 0) {
+            throw new Error("Please select at least one page to extract.");
+          }
+          formData.append("pages", selectedPages.join(","));
+          formData.append("as_zip", "false");
+          break;
+
+        case "organize-pages":
+          formData.append("file", files[0]);
+          formData.append("page_order", JSON.stringify(pageOrder));
+          formData.append("rotations", JSON.stringify(rotations));
+          break;
+
+        case "rotate-pdf":
+          formData.append("file", files[0]);
+          formData.append("angle", String(rotateAngle));
+          if (selectedPages.length > 0) {
+            formData.append("pages", selectedPages.join(","));
+          }
+          break;
+
+        case "page-numbers":
+          formData.append("file", files[0]);
+          formData.append("position", pageNumberPosition);
+          formData.append("format_type", pageNumberFormat);
+          formData.append("font_size", "10");
+          break;
+
+        case "add-watermark":
+          formData.append("file", files[0]);
+          formData.append("watermark_type", "text");
+          formData.append("text", watermarkText);
+          formData.append("opacity", String(watermarkOpacity));
+          formData.append("rotation", String(watermarkRotation));
+          formData.append("color", watermarkColor);
+          break;
+
+        case "compress-pdf":
+          formData.append("file", files[0]);
+          formData.append("compression_level", compressionLevel);
+          break;
+
+        case "repair-pdf":
+          formData.append("file", files[0]);
+          break;
+
+        case "ocr-pdf":
+          formData.append("file", files[0]);
+          formData.append("language", ocrLanguage);
+          break;
+
+        case "jpg-to-pdf":
+          files.forEach((f) => formData.append("files", f));
+          formData.append("page_size", pageSize);
+          formData.append("orientation", pageOrientation);
+          break;
+
+        case "word-to-pdf":
+        case "powerpoint-to-pdf":
+        case "excel-to-pdf":
+        case "html-to-pdf":
+        case "pdf-to-jpg":
+        case "pdf-to-word":
+        case "pdf-to-powerpoint":
+        case "pdf-to-excel":
+          formData.append("file", files[0]);
+          break;
+
+        case "pdf-to-pdfa":
+          formData.append("file", files[0]);
+          formData.append("version", pdfaVersion);
+          break;
+
+        case "protect-pdf":
+          if (!password) throw new Error("Password cannot be empty.");
+          if (password !== confirmPassword) throw new Error("Passwords do not match.");
+          formData.append("file", files[0]);
+          formData.append("password", password);
+          break;
+
+        case "unlock-pdf":
+          if (!password) throw new Error("Please enter document password.");
+          formData.append("file", files[0]);
+          formData.append("password", password);
+          break;
+
+        case "sign-pdf":
+          if (!signatureDataUrl) throw new Error("Please draw or type your signature.");
+          formData.append("file", files[0]);
+          formData.append("page", String(signaturePos ? signaturePos.page : 1));
+          formData.append("x", String(signaturePos ? signaturePos.x : 100));
+          formData.append("y", String(signaturePos ? signaturePos.y : 100));
+          formData.append("width", String(signaturePos ? signaturePos.width : 140));
+          formData.append("height", String(signaturePos ? signaturePos.height : 60));
+          formData.append("signature_data_url", signatureDataUrl);
+          break;
+
+        case "redact-pdf":
+          if (redactions.length === 0) {
+            throw new Error("Please drag and blackout at least one area on a page.");
+          }
+          formData.append("file", files[0]);
+          formData.append("redactions", JSON.stringify(redactions));
+          break;
+
+        case "edit-pdf":
+          formData.append("file", files[0]);
+          const edits = [];
+          if (editText.trim()) {
+            edits.push({
+              type: "text",
+              page: activePlacementPage,
+              text: editText,
+              x: 100,
+              y: 150,
+              fontSize: 16,
+              color: editColor,
+            });
+          }
+          if (selectedPages.length > 0) {
+            selectedPages.forEach((p) => {
+              edits.push({
+                type: "rotate",
+                page: p,
+                angle: 90,
+              });
+            });
+          }
+          formData.append("edits", JSON.stringify(edits));
+          break;
+
+        default:
+          formData.append("file", files[0]);
+      }
+
+      // Proxy API request through Next backend rewrite
+      const endpointUrl = `/api/backend${tool.endpoint.replace("/api", "")}`;
+      const res = await fetch(endpointUrl, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Processing failed with status ${res.status}`);
+      }
+
+      const data = await res.json();
+      setResult(data);
+    } catch (err: any) {
+      setError(err.message || "An unexpected error occurred during processing.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const isPdf = files.length > 0 && files[0].name.toLowerCase().endsWith(".pdf");
+
+  return (
+    <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-8">
+      {/* Top back button & breadcrumb */}
+      <div className="flex items-center gap-2 mb-6">
+        <Link
+          href="/"
+          className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-red-600 transition-colors"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          Back to all tools
+        </Link>
+      </div>
+
+      {/* Hero Title Section */}
+      <div className="text-center max-w-3xl mx-auto mb-10">
+        <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-red-100 text-red-600 mb-4 shadow-xs">
+          <ToolIcon name={tool.icon} className="w-7 h-7" />
+        </div>
+        <h1 className="text-3xl sm:text-4xl font-extrabold text-gray-900 tracking-tight mb-3">
+          {tool.title}
+        </h1>
+        <p className="text-base text-gray-500 leading-relaxed">{tool.description}</p>
+      </div>
+
+      {/* Main Card View */}
+      {result ? (
+        <DownloadView
+          filename={result.filename}
+          downloadUrl={result.download_url}
+          fileSize={result.file_size}
+          originalSize={result.original_size}
+          savingsPercent={result.savings_percent}
+          onReset={handleReset}
+          toolTitle={tool.title}
+        />
+      ) : (
+        <div className="space-y-8">
+          {/* File Upload Zone */}
+          <FileUploadZone
+            acceptedTypes={tool.acceptedFileTypes}
+            allowMultiple={tool.allowMultiple}
+            files={files}
+            onFilesChange={setFiles}
+            title={`Select ${tool.allowMultiple ? "files" : "file"} for ${tool.title}`}
+          />
+
+          {/* Interactive Configuration Panels (shown once file is selected) */}
+          {files.length > 0 && (
+            <div className="bg-white rounded-3xl border border-gray-200 p-6 sm:p-8 shadow-xs">
+              <div className="flex items-center gap-2 mb-6 pb-4 border-b border-gray-100">
+                <Settings className="w-5 h-5 text-red-600" />
+                <h3 className="text-lg font-bold text-gray-900">{tool.title} Options</h3>
+              </div>
+
+              {/* 1. Organize Options */}
+              {tool.id === "split-pdf" && isPdf && (
+                <div className="space-y-6">
+                  <div className="flex rounded-xl bg-gray-100 p-1 max-w-md">
+                    <button
+                      type="button"
+                      onClick={() => setSplitMode("ranges")}
+                      className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${
+                        splitMode === "ranges" ? "bg-white text-gray-900 shadow-xs" : "text-gray-500"
+                      }`}
+                    >
+                      Split by Page Range
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSplitMode("all")}
+                      className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${
+                        splitMode === "all" ? "bg-white text-gray-900 shadow-xs" : "text-gray-500"
+                      }`}
+                    >
+                      Extract All Pages (ZIP)
+                    </button>
+                  </div>
+                  {splitMode === "ranges" && (
+                    <div className="max-w-md">
+                      <label className="block text-xs font-bold text-gray-700 mb-1">
+                        Page Ranges (e.g. "1-3, 5" or "1-2; 3-5" for multiple files)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 1-3, 5"
+                        value={splitRanges}
+                        onChange={(e) => setSplitRanges(e.target.value)}
+                        className="w-full px-4 py-2.5 rounded-xl border border-gray-300 text-sm focus:border-red-500 outline-none"
+                      />
+                    </div>
+                  )}
+                  <ThumbnailSelector file={files[0]} mode="view" />
+                </div>
+              )}
+
+              {tool.id === "remove-pages" && isPdf && (
+                <div className="space-y-4">
+                  <p className="text-xs text-gray-500">
+                    Click the pages you wish to delete. Selected pages ({selectedPages.length}) will be removed.
+                  </p>
+                  <ThumbnailSelector
+                    file={files[0]}
+                    mode="select"
+                    selectedPages={selectedPages}
+                    onSelectedPagesChange={setSelectedPages}
+                  />
+                </div>
+              )}
+
+              {tool.id === "extract-pages" && isPdf && (
+                <div className="space-y-4">
+                  <p className="text-xs text-gray-500">
+                    Click the pages you want to extract ({selectedPages.length} selected).
+                  </p>
+                  <ThumbnailSelector
+                    file={files[0]}
+                    mode="select"
+                    selectedPages={selectedPages}
+                    onSelectedPagesChange={setSelectedPages}
+                  />
+                </div>
+              )}
+
+              {tool.id === "organize-pages" && isPdf && (
+                <div className="space-y-4">
+                  <p className="text-xs text-gray-500">
+                    Use arrows to reorder pages and the rotation button to adjust sheet orientation.
+                  </p>
+                  <ThumbnailSelector
+                    file={files[0]}
+                    mode="reorder"
+                    pageOrder={pageOrder}
+                    onPageOrderChange={setPageOrder}
+                    rotations={rotations}
+                    onRotationsChange={setRotations}
+                  />
+                </div>
+              )}
+
+              {tool.id === "rotate-pdf" && isPdf && (
+                <div className="space-y-6">
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-bold text-gray-700">Rotation Angle:</span>
+                    {[90, 180, 270].map((angle) => (
+                      <button
+                        key={angle}
+                        type="button"
+                        onClick={() => setRotateAngle(angle)}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                          rotateAngle === angle
+                            ? "bg-red-600 text-white shadow-xs"
+                            : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                        }`}
+                      >
+                        +{angle}° Clockwise
+                      </button>
+                    ))}
+                  </div>
+                  <ThumbnailSelector
+                    file={files[0]}
+                    mode="rotate"
+                    selectedPages={selectedPages}
+                    onSelectedPagesChange={setSelectedPages}
+                  />
+                </div>
+              )}
+
+              {tool.id === "page-numbers" && isPdf && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-xl">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Position</label>
+                    <select
+                      value={pageNumberPosition}
+                      onChange={(e) => setPageNumberPosition(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-gray-300 text-sm outline-none focus:border-red-500"
+                    >
+                      <option value="bottom-center">Bottom Center</option>
+                      <option value="bottom-right">Bottom Right</option>
+                      <option value="bottom-left">Bottom Left</option>
+                      <option value="top-center">Top Center</option>
+                      <option value="top-right">Top Right</option>
+                      <option value="top-left">Top Left</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Format</label>
+                    <select
+                      value={pageNumberFormat}
+                      onChange={(e) => setPageNumberFormat(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-gray-300 text-sm outline-none focus:border-red-500"
+                    >
+                      <option value="page_of_total">Page X of Y</option>
+                      <option value="page_only">Page X</option>
+                      <option value="dash">- X -</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {tool.id === "add-watermark" && isPdf && (
+                <div className="space-y-4 max-w-xl">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Watermark Text</label>
+                    <input
+                      type="text"
+                      value={watermarkText}
+                      onChange={(e) => setWatermarkText(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-xl border border-gray-300 text-sm outline-none focus:border-red-500"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-gray-700 mb-1">
+                        Rotation Angle ({watermarkRotation}°)
+                      </label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="360"
+                        step="15"
+                        value={watermarkRotation}
+                        onChange={(e) => setWatermarkRotation(Number(e.target.value))}
+                        className="w-full"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-700 mb-1">
+                        Opacity ({Math.round(watermarkOpacity * 100)}%)
+                      </label>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="1.0"
+                        step="0.05"
+                        value={watermarkOpacity}
+                        onChange={(e) => setWatermarkOpacity(Number(e.target.value))}
+                        className="w-full"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 2. Optimize Options */}
+              {tool.id === "compress-pdf" && isPdf && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {[
+                    {
+                      id: "extreme",
+                      title: "Extreme Compression",
+                      desc: "Maximum file reduction, optimized for web transfer.",
+                    },
+                    {
+                      id: "recommended",
+                      title: "Recommended Compression",
+                      desc: "Balanced high quality and excellent size reduction.",
+                    },
+                    {
+                      id: "less",
+                      title: "Less Compression",
+                      desc: "High visual fidelity with lossless stream optimization.",
+                    },
+                  ].map((lvl) => (
+                    <div
+                      key={lvl.id}
+                      onClick={() => setCompressionLevel(lvl.id as any)}
+                      className={`cursor-pointer p-4 rounded-2xl border-2 transition-all ${
+                        compressionLevel === lvl.id
+                          ? "border-emerald-500 bg-emerald-50/40 ring-2 ring-emerald-100"
+                          : "border-gray-200 hover:border-gray-300"
+                      }`}
+                    >
+                      <h4 className="text-sm font-bold text-gray-900 mb-1">{lvl.title}</h4>
+                      <p className="text-xs text-gray-500">{lvl.desc}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {tool.id === "ocr-pdf" && isPdf && (
+                <div className="max-w-xs">
+                  <label className="block text-xs font-bold text-gray-700 mb-1">Document Language</label>
+                  <select
+                    value={ocrLanguage}
+                    onChange={(e) => setOcrLanguage(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-gray-300 text-sm outline-none focus:border-red-500"
+                  >
+                    <option value="eng">English</option>
+                    <option value="osd">Auto Detect Script</option>
+                  </select>
+                </div>
+              )}
+
+              {/* 3. Convert Options */}
+              {tool.id === "jpg-to-pdf" && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-md">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Page Size</label>
+                    <select
+                      value={pageSize}
+                      onChange={(e) => setPageSize(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-gray-300 text-sm outline-none focus:border-red-500"
+                    >
+                      <option value="A4">A4 (Standard)</option>
+                      <option value="Letter">US Letter</option>
+                      <option value="Fit">Fit to Image</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Orientation</label>
+                    <select
+                      value={pageOrientation}
+                      onChange={(e) => setPageOrientation(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-gray-300 text-sm outline-none focus:border-red-500"
+                    >
+                      <option value="auto">Auto Orient</option>
+                      <option value="portrait">Portrait</option>
+                      <option value="landscape">Landscape</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {/* 4. Security: Protect & Unlock */}
+              {tool.id === "protect-pdf" && isPdf && (
+                <div className="space-y-4 max-w-md">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Set Document Password</label>
+                    <input
+                      type="password"
+                      placeholder="Enter strong password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-xl border border-gray-300 text-sm outline-none focus:border-red-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Confirm Password</label>
+                    <input
+                      type="password"
+                      placeholder="Repeat password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-xl border border-gray-300 text-sm outline-none focus:border-red-500"
+                    />
+                  </div>
+                  <p className="text-[11px] text-gray-500 flex items-center gap-1">
+                    <Lock className="w-3.5 h-3.5 text-rose-500" />
+                    Secured with standard AES-256 encryption.
+                  </p>
+                </div>
+              )}
+
+              {tool.id === "unlock-pdf" && isPdf && (
+                <div className="max-w-md space-y-3">
+                  <label className="block text-xs font-bold text-gray-700">Enter Document Password</label>
+                  <input
+                    type="password"
+                    placeholder="Enter current PDF password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full px-4 py-2.5 rounded-xl border border-gray-300 text-sm outline-none focus:border-red-500"
+                  />
+                  <p className="text-[11px] text-gray-500 flex items-center gap-1">
+                    <Unlock className="w-3.5 h-3.5 text-rose-500" />
+                    Security and password restrictions will be permanently removed.
+                  </p>
+                </div>
+              )}
+
+              {/* 5. Sign PDF Canvas */}
+              {tool.id === "sign-pdf" && isPdf && (
+                <div className="space-y-6">
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setIsSignatureModalOpen(true)}
+                      className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all"
+                    >
+                      <PenTool className="w-4 h-4" />
+                      {signatureDataUrl ? "Change Signature" : "Create Signature"}
+                    </button>
+                    {signatureDataUrl && (
+                      <span className="text-xs text-emerald-600 font-semibold">
+                        Signature ready. Click on the document page below to position it.
+                      </span>
+                    )}
+                  </div>
+
+                  <ThumbnailSelector
+                    file={files[0]}
+                    mode="view"
+                    onPageClick={(pNum) => setActivePlacementPage(pNum)}
+                  />
+
+                  {signatureDataUrl && (
+                    <PagePlacementCanvas
+                      pageThumbnail={files[0] ? URL.createObjectURL(files[0]) : ""}
+                      pageNumber={activePlacementPage}
+                      mode="sign"
+                      signatureImage={signatureDataUrl}
+                      signaturePos={signaturePos}
+                      onSignaturePosChange={setSignaturePos}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* 6. Redact PDF Canvas */}
+              {tool.id === "redact-pdf" && isPdf && (
+                <div className="space-y-6">
+                  <div className="p-3 bg-rose-50 border border-rose-100 rounded-xl text-xs text-rose-700 flex items-center gap-2">
+                    <ShieldAlert className="w-4 h-4 shrink-0" />
+                    <span>
+                      Redaction permanently removes text characters, vector paths, and image pixels underneath.
+                      Select a page below, then drag your mouse to create blackout boxes.
+                    </span>
+                  </div>
+
+                  <ThumbnailSelector
+                    file={files[0]}
+                    mode="view"
+                    onPageClick={(pNum) => setActivePlacementPage(pNum)}
+                  />
+
+                  <PagePlacementCanvas
+                    pageThumbnail={files[0] ? URL.createObjectURL(files[0]) : ""}
+                    pageNumber={activePlacementPage}
+                    mode="redact"
+                    redactions={redactions}
+                    onRedactionsChange={setRedactions}
+                  />
+                </div>
+              )}
+
+              {/* 7. Edit PDF */}
+              {tool.id === "edit-pdf" && isPdf && (
+                <div className="space-y-6">
+                  <div className="max-w-md space-y-3">
+                    <label className="block text-xs font-bold text-gray-700">Add Text to Page {activePlacementPage}</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Enter text to insert..."
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        className="flex-1 px-4 py-2 rounded-xl border border-gray-300 text-sm outline-none focus:border-red-500"
+                      />
+                      <input
+                        type="color"
+                        value={editColor}
+                        onChange={(e) => setEditColor(e.target.value)}
+                        className="w-10 h-10 p-1 rounded-xl border border-gray-300 cursor-pointer"
+                        title="Text Color"
+                      />
+                    </div>
+                  </div>
+
+                  <ThumbnailSelector
+                    file={files[0]}
+                    mode="select"
+                    selectedPages={selectedPages}
+                    onSelectedPagesChange={setSelectedPages}
+                    onPageClick={(pNum) => setActivePlacementPage(pNum)}
+                  />
+                </div>
+              )}
+
+              {/* Error banner */}
+              {error && (
+                <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-2xl flex items-center gap-3 text-red-700 text-sm">
+                  <AlertCircle className="w-5 h-5 shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {/* Action Trigger Button */}
+              <div className="mt-8 pt-6 border-t border-gray-100 flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleProcess}
+                  disabled={loading}
+                  className="flex items-center gap-2 px-8 py-4 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-extrabold text-base rounded-2xl shadow-lg hover:shadow-red-500/25 transition-all group"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      <span>Processing document with PDFly...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-5 h-5" />
+                      <span>{tool.title}</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Signature Modal */}
+      <SignatureModal
+        isOpen={isSignatureModalOpen}
+        onClose={() => setIsSignatureModalOpen(false)}
+        onSaveSignature={(dataUrl) => {
+          setSignatureDataUrl(dataUrl);
+          if (!signaturePos) {
+            setSignaturePos({ page: 1, x: 100, y: 100, width: 140, height: 60 });
+          }
+        }}
+      />
+    </div>
+  );
+}
