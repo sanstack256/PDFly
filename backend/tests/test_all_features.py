@@ -606,3 +606,4 @@ def test_preview_info_and_thumbnails():
     thumb_data = thumb_res.json()
     assert len(thumb_data["thumbnails"]) == 3
     assert thumb_data["thumbnails"][0]["thumbnail_data"].startswith("data:image/jpeg;base64,")
+

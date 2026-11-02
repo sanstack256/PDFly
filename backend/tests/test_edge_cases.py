@@ -51,3 +51,4 @@ def test_invalid_remove_all_pages():
     )
     assert response.status_code == 400
     assert "Cannot remove all pages" in response.json()["detail"]
+

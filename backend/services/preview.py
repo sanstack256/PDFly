@@ -71,3 +71,4 @@ def generate_page_thumbnails(
         
     doc.close()
     return thumbnails
+

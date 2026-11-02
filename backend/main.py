@@ -670,3 +670,4 @@ async def download_file(job_id: str, filename: str):
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
+

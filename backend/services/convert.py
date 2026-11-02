@@ -235,3 +235,4 @@ def pdf_to_pdfa(file_path: Path, output_path: Path, pdfa_level: str = "2") -> Pa
     if not output_path.exists() or os.path.getsize(output_path) == 0:
         raise RuntimeError(f"PDF/A conversion failed: {res.stderr}")
     return output_path
+

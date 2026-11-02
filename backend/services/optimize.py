@@ -178,3 +178,4 @@ def ocr_pdf(file_path: Path, language: str = "eng", output_path: Path = None) ->
         "language": language,
         "output_path": output_path
     }
+

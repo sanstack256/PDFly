@@ -107,3 +107,4 @@ def redact_pdf(
     doc.save(output_path, garbage=4, clean=True, deflate=True)
     doc.close()
     return output_path
+
