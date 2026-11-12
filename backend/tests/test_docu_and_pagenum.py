@@ -131,3 +131,4 @@ def test_docu_api_endpoint():
     assert data["success"] is True
     assert "documentation_manual.pdf" in data["filename"]
     assert data["download_url"].startswith("/api/download/")
+
