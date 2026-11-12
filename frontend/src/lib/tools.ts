@@ -240,6 +240,20 @@ export const TOOLS: ToolConfig[] = [
     allowMultiple: false,
     endpoint: "/api/convert/html-to-pdf",
   },
+  {
+    id: "docu-to-pdf",
+    title: "Docu: Documentation to PDF",
+    shortDesc: "Convert online docs, manuals & guides into an offline PDF book",
+    description: "Crawl and convert documentation websites, API guides, and web articles into a structured offline PDF manual with a clickable table of contents, bookmarks, syntax-highlighted code blocks, and formatted tables.",
+    category: "to-pdf",
+    href: "/tools/docu-to-pdf",
+    icon: "BookOpen",
+    badge: "Docu Engine",
+    color: "bg-indigo-600",
+    acceptedFileTypes: ".html,.htm,.txt,.zip",
+    allowMultiple: true,
+    endpoint: "/api/convert/docu-to-pdf",
+  },
 
   // 4. Convert from PDF
   {

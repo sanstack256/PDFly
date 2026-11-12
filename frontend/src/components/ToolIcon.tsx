@@ -26,6 +26,7 @@ import {
   PenTool,
   EyeOff,
   FileQuestion,
+  BookOpen,
   LucideProps,
 } from "lucide-react";
 
@@ -81,6 +82,8 @@ export default function ToolIcon({ name, ...props }: ToolIconProps) {
       return <PenTool {...props} />;
     case "EyeOff":
       return <EyeOff {...props} />;
+    case "BookOpen":
+      return <BookOpen {...props} />;
     default:
       return <FileQuestion {...props} />;
   }

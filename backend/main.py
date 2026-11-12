@@ -21,6 +21,7 @@ from services.convert import (
 from services.edit import export_editor_pdf, extract_pdf_content, PAGE_SIZES
 from services.security import protect_pdf, unlock_pdf, sign_pdf, redact_pdf
 from services.preview import get_pdf_info, generate_page_thumbnails
+from services.docu import convert_documentation_to_pdf, discover_doc_pages
 
 app = FastAPI(title="PDFly Backend API", version="1.0.0")
 
@@ -201,17 +202,18 @@ async def handle_rotate(
 @app.post("/api/organize/page-numbers")
 async def handle_page_numbers(
     file: UploadFile = File(...),
-    position: str = Form("bottom-center"),
+    position: str = Form("bottom-right"),
     format_type: str = Form("page_of_total"),
     start_page: int = Form(1),
     font_size: float = Form(10.0),
-    margin: float = Form(36.0)
+    margin: float = Form(36.0),
+    color: str = Form("#333333")
 ):
     job_dir = create_job_dir()
     file_path = await save_upload(file, job_dir)
     out_file = job_dir / "page_numbered.pdf"
     try:
-        add_page_numbers(file_path, position, format_type, start_page, font_size, margin, out_file)
+        add_page_numbers(file_path, position=position, format_type=format_type, start_page=start_page, font_size=font_size, margin=margin, color_hex=color, output_path=out_file)
         return {
             "success": True,
             "filename": out_file.name,
@@ -412,6 +414,65 @@ async def handle_html_to_pdf(file: UploadFile = File(...)):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/convert/docu-discover")
+async def handle_docu_discover(
+    url: str = Form(...),
+    max_pages: int = Form(20),
+    max_depth: int = Form(3)
+):
+    try:
+        result = discover_doc_pages(url, max_pages=max_pages, max_depth=max_depth)
+        return {
+            "success": True,
+            **result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/convert/docu-to-pdf")
+async def handle_docu_to_pdf(
+    file: Optional[UploadFile] = File(None),
+    url: Optional[str] = Form(None),
+    selected_urls: Optional[str] = Form(None),
+    document_title: Optional[str] = Form(None),
+    max_pages: int = Form(20),
+    max_depth: int = Form(3)
+):
+    job_dir = create_job_dir()
+    uploaded_files = []
+    if file and file.filename:
+        saved_p = await save_upload(file, job_dir)
+        uploaded_files.append(saved_p)
+
+    selected_list = None
+    if selected_urls:
+        try:
+            selected_list = json.loads(selected_urls)
+        except Exception:
+            selected_list = [u.strip() for u in selected_urls.split(",") if u.strip()]
+
+    out_file = job_dir / "documentation_manual.pdf"
+    try:
+        meta = convert_documentation_to_pdf(
+            url=url,
+            files=uploaded_files,
+            selected_urls=selected_list,
+            document_title=document_title,
+            max_pages=max_pages,
+            max_depth=max_depth,
+            output_path=out_file
+        )
+        return {
+            "success": True,
+            "filename": out_file.name,
+            "download_url": f"/api/download/{job_dir.name}/{out_file.name}",
+            "job_id": job_dir.name,
+            "file_size": os.path.getsize(out_file),
+            **meta
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 # ---------------- 4. CONVERT FROM PDF ----------------
 

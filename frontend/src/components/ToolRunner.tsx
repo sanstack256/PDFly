@@ -26,6 +26,11 @@ import {
   Eye,
   Check,
   Trash2,
+  BookOpen,
+  Globe,
+  Search,
+  ExternalLink,
+  CheckCircle2,
 } from "lucide-react";
 
 interface ToolRunnerProps {
@@ -102,8 +107,12 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
   const [pageOrder, setPageOrder] = useState<number[]>([]);
   const [rotations, setRotations] = useState<Record<number, number>>({});
   const [rotateAngle, setRotateAngle] = useState(90);
-  const [pageNumberPosition, setPageNumberPosition] = useState("bottom-center");
+  const [pageNumberPosition, setPageNumberPosition] = useState("bottom-right");
   const [pageNumberFormat, setPageNumberFormat] = useState("page_of_total");
+  const [pageNumberFontSize, setPageNumberFontSize] = useState(11);
+  const [pageNumberMargin, setPageNumberMargin] = useState(36);
+  const [pageNumberColor, setPageNumberColor] = useState("#333333");
+  const [pageNumberStartPage, setPageNumberStartPage] = useState(1);
   const [watermarkType, setWatermarkType] = useState<"text" | "image">("text");
   const [watermarkText, setWatermarkText] = useState("CONFIDENTIAL");
   const [watermarkFontSize, setWatermarkFontSize] = useState(48);
@@ -133,6 +142,17 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
   const [editText, setEditText] = useState("");
   const [editColor, setEditColor] = useState("#0000FF");
 
+  // 5. Docu: Documentation to PDF
+  const [docuMode, setDocuMode] = useState<"url" | "upload">("url");
+  const [docuUrl, setDocuUrl] = useState("https://docs.python.org/3/tutorial/");
+  const [docuTitle, setDocuTitle] = useState("");
+  const [docuMaxPages, setDocuMaxPages] = useState(20);
+  const [docuMaxDepth, setDocuMaxDepth] = useState(2);
+  const [docuDiscoveredPages, setDocuDiscoveredPages] = useState<Array<{ url: string; title: string; section?: string; depth: number; path?: string }>>([]);
+  const [docuSelectedUrls, setDocuSelectedUrls] = useState<string[]>([]);
+  const [docuDiscovering, setDocuDiscovering] = useState(false);
+  const [docuDiscoveryDone, setDocuDiscoveryDone] = useState(false);
+
   const handleReset = () => {
     setFiles([]);
     setResult(null);
@@ -150,10 +170,51 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
     setSignaturePos(null);
     setPassword("");
     setConfirmPassword("");
+    setDocuMode("url");
+    setDocuUrl("https://docs.python.org/3/tutorial/");
+    setDocuTitle("");
+    setDocuMaxPages(20);
+    setDocuMaxDepth(2);
+    setDocuDiscoveredPages([]);
+    setDocuSelectedUrls([]);
+    setDocuDiscovering(false);
+    setDocuDiscoveryDone(false);
+  };
+
+  const handleDiscoverDocPages = async () => {
+    if (!docuUrl.trim()) return;
+    setDocuDiscovering(true);
+    setError(null);
+    try {
+      const fd = new FormData();
+      fd.append("url", docuUrl.trim());
+      fd.append("max_pages", String(docuMaxPages));
+      fd.append("max_depth", String(docuMaxDepth));
+      const res = await fetch(getApiUrl("/api/convert/docu-discover"), {
+        method: "POST",
+        body: fd,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to discover documentation pages.");
+      }
+      const data = await res.json();
+      const pages = data.pages || [];
+      setDocuDiscoveredPages(pages);
+      setDocuSelectedUrls(pages.map((p: any) => p.url));
+      if (data.site_title && !docuTitle) {
+        setDocuTitle(`${data.site_title} Manual`);
+      }
+      setDocuDiscoveryDone(true);
+    } catch (err: any) {
+      setError(err.message || "Failed to discover documentation pages.");
+    } finally {
+      setDocuDiscovering(false);
+    }
   };
 
   const handleProcess = async () => {
-    if (files.length === 0) return;
+    if (files.length === 0 && (tool.id !== "docu-to-pdf" || docuMode !== "url")) return;
     setError(null);
     setLoading(true);
 
@@ -212,7 +273,10 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
           formData.append("file", files[0]);
           formData.append("position", pageNumberPosition);
           formData.append("format_type", pageNumberFormat);
-          formData.append("font_size", "10");
+          formData.append("font_size", String(pageNumberFontSize));
+          formData.append("margin", String(pageNumberMargin));
+          formData.append("color", pageNumberColor);
+          formData.append("start_page", String(pageNumberStartPage));
           break;
 
         case "add-watermark":
@@ -256,6 +320,25 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
         case "powerpoint-to-pdf":
         case "excel-to-pdf":
         case "html-to-pdf":
+          formData.append("file", files[0]);
+          break;
+
+        case "docu-to-pdf":
+          if (docuMode === "url") {
+            if (!docuUrl.trim()) throw new Error("Please enter a documentation website URL.");
+            formData.append("url", docuUrl.trim());
+            if (docuTitle.trim()) formData.append("document_title", docuTitle.trim());
+            formData.append("max_pages", String(docuMaxPages));
+            formData.append("max_depth", String(docuMaxDepth));
+            if (docuSelectedUrls.length > 0) {
+              formData.append("selected_urls", JSON.stringify(docuSelectedUrls));
+            }
+          } else {
+            if (files.length === 0) throw new Error("Please upload at least one HTML or documentation file.");
+            files.forEach((f) => formData.append("file", f));
+            if (docuTitle.trim()) formData.append("document_title", docuTitle.trim());
+          }
+          break;
         case "pdf-to-jpg":
         case "pdf-to-word":
         case "pdf-to-powerpoint":
@@ -390,17 +473,216 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
         />
       ) : (
         <div className="space-y-8">
-          {/* File Upload Zone */}
-          <FileUploadZone
-            acceptedTypes={tool.acceptedFileTypes}
-            allowMultiple={tool.allowMultiple}
-            files={files}
-            onFilesChange={setFiles}
-            title={`Select ${tool.allowMultiple ? "files" : "file"} for ${tool.title}`}
-          />
+          {/* Docu Mode Switcher */}
+          {tool.id === "docu-to-pdf" && (
+            <div className="flex items-center p-1.5 bg-gray-100 rounded-2xl max-w-md mx-auto mb-2">
+              <button
+                type="button"
+                onClick={() => setDocuMode("url")}
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                  docuMode === "url"
+                    ? "bg-white text-indigo-700 shadow-xs"
+                    : "text-gray-600 hover:text-gray-900"
+                }`}
+              >
+                <Globe className="w-3.5 h-3.5" />
+                Documentation URL
+              </button>
+              <button
+                type="button"
+                onClick={() => setDocuMode("upload")}
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                  docuMode === "upload"
+                    ? "bg-white text-indigo-700 shadow-xs"
+                    : "text-gray-600 hover:text-gray-900"
+                }`}
+              >
+                <Upload className="w-3.5 h-3.5" />
+                Upload HTML / Files
+              </button>
+            </div>
+          )}
 
-          {/* Interactive Configuration Panels (shown once file is selected) */}
-          {files.length > 0 && (
+          {/* If Docu & URL mode: render Docu URL Card */}
+          {tool.id === "docu-to-pdf" && docuMode === "url" ? (
+            <div className="bg-white rounded-3xl border border-gray-200 p-6 sm:p-8 shadow-xs space-y-6">
+              <div>
+                <label className="block text-xs font-bold text-gray-800 uppercase tracking-wider mb-2">
+                  Documentation Website or Article URL
+                </label>
+                <div className="flex flex-col sm:flex-row gap-2.5">
+                  <div className="relative flex-1">
+                    <input
+                      type="url"
+                      placeholder="https://docs.python.org/3/tutorial/"
+                      value={docuUrl}
+                      onChange={(e) => setDocuUrl(e.target.value)}
+                      className="w-full px-4 py-3 rounded-2xl border border-gray-300 text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleDiscoverDocPages}
+                    disabled={docuDiscovering || !docuUrl.trim()}
+                    className="flex items-center justify-center gap-2 px-5 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs transition-all shadow-xs"
+                  >
+                    {docuDiscovering ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Discovering Pages...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Search className="w-4 h-4" />
+                        <span>Discover Pages</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Quick Preset Chips */}
+              <div className="flex items-center gap-2 flex-wrap text-xs">
+                <span className="text-gray-500 font-semibold">Try sample:</span>
+                {[
+                  { label: "Python Tutorial", url: "https://docs.python.org/3/tutorial/" },
+                  { label: "FastAPI User Guide", url: "https://fastapi.tiangolo.com/tutorial/" },
+                  { label: "Docker Quickstart", url: "https://docs.docker.com/get-started/" },
+                ].map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => {
+                      setDocuUrl(preset.url);
+                      setDocuTitle(`${preset.label} Manual`);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium transition-colors"
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Configuration Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t border-gray-100">
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">Custom Book Title</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. FastAPI Developer Guide"
+                    value={docuTitle}
+                    onChange={(e) => setDocuTitle(e.target.value)}
+                    className="w-full px-3.5 py-2 rounded-xl border border-gray-300 text-xs font-medium outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold text-gray-700">Max Pages ({docuMaxPages})</label>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="50"
+                    step="1"
+                    value={docuMaxPages}
+                    onChange={(e) => setDocuMaxPages(Number(e.target.value))}
+                    className="w-full accent-indigo-600 mt-1"
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold text-gray-700">Crawl Depth ({docuMaxDepth})</label>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="4"
+                    step="1"
+                    value={docuMaxDepth}
+                    onChange={(e) => setDocuMaxDepth(Number(e.target.value))}
+                    className="w-full accent-indigo-600 mt-1"
+                  />
+                </div>
+              </div>
+
+              {/* Discovered Pages List */}
+              {docuDiscoveredPages.length > 0 && (
+                <div className="pt-4 border-t border-gray-100 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-gray-700 uppercase tracking-wider flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      Discovered {docuDiscoveredPages.length} Pages (Selected: {docuSelectedUrls.length})
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDocuSelectedUrls(docuDiscoveredPages.map((p) => p.url))}
+                        className="text-xs font-semibold text-indigo-600 hover:underline"
+                      >
+                        Select All
+                      </button>
+                      <span className="text-gray-300">|</span>
+                      <button
+                        type="button"
+                        onClick={() => setDocuSelectedUrls([])}
+                        className="text-xs font-semibold text-gray-500 hover:underline"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="max-h-60 overflow-y-auto space-y-1.5 p-2 bg-gray-50 rounded-2xl border border-gray-200">
+                    {docuDiscoveredPages.map((p) => {
+                      const isChecked = docuSelectedUrls.includes(p.url);
+                      return (
+                        <div
+                          key={p.url}
+                          onClick={() => {
+                            if (isChecked) {
+                              setDocuSelectedUrls(docuSelectedUrls.filter((u) => u !== p.url));
+                            } else {
+                              setDocuSelectedUrls([...docuSelectedUrls, p.url]);
+                            }
+                          }}
+                          className={`flex items-center justify-between p-2.5 rounded-xl border text-xs cursor-pointer transition-all ${
+                            isChecked
+                              ? "bg-white border-indigo-300 shadow-2xs text-gray-900"
+                              : "bg-gray-100/50 border-transparent text-gray-500"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 overflow-hidden">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              readOnly
+                              className="rounded text-indigo-600 pointer-events-none"
+                            />
+                            <span className="font-bold truncate">{p.title}</span>
+                          </div>
+                          <span className="text-[10px] text-gray-400 font-mono shrink-0 ml-2">
+                            {p.path}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* File Upload Zone */
+            <FileUploadZone
+              acceptedTypes={tool.acceptedFileTypes}
+              allowMultiple={tool.allowMultiple}
+              files={files}
+              onFilesChange={setFiles}
+              title={`Select ${tool.allowMultiple ? "files" : "file"} for ${tool.title}`}
+            />
+          )}
+
+          {/* Interactive Configuration Panels (shown once file is selected or if docu url mode) */}
+          {(files.length > 0 || (tool.id === "docu-to-pdf" && docuMode === "url")) && (
             <div className="bg-white rounded-3xl border border-gray-200 p-6 sm:p-8 shadow-xs">
               <div className="flex items-center gap-2 mb-6 pb-4 border-b border-gray-100">
                 <Settings className="w-5 h-5 text-red-600" />
@@ -567,7 +849,7 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
               {tool.id === "organize-pages" && isPdf && (
                 <div className="space-y-4">
                   <p className="text-xs text-gray-500">
-                    Use arrows to reorder pages and the rotation button to adjust sheet orientation.
+                    Drag and drop page cards to reorder your document, use arrow buttons, or rotate individual sheets.
                   </p>
                   <ThumbnailSelector
                     file={files[0]}
@@ -576,6 +858,11 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
                     onPageOrderChange={setPageOrder}
                     rotations={rotations}
                     onRotationsChange={setRotations}
+                    onPageCountLoaded={(cnt) => {
+                      if (pageOrder.length === 0) {
+                        setPageOrder(Array.from({ length: cnt }, (_, i) => i + 1));
+                      }
+                    }}
                   />
                 </div>
               )}
@@ -609,33 +896,197 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
               )}
 
               {tool.id === "page-numbers" && isPdf && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-xl">
-                  <div>
-                    <label className="block text-xs font-bold text-gray-700 mb-1">Position</label>
-                    <select
-                      value={pageNumberPosition}
-                      onChange={(e) => setPageNumberPosition(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl border border-gray-300 text-sm outline-none focus:border-red-500"
-                    >
-                      <option value="bottom-center">Bottom Center</option>
-                      <option value="bottom-right">Bottom Right</option>
-                      <option value="bottom-left">Bottom Left</option>
-                      <option value="top-center">Top Center</option>
-                      <option value="top-right">Top Right</option>
-                      <option value="top-left">Top Left</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-gray-700 mb-1">Format</label>
-                    <select
-                      value={pageNumberFormat}
-                      onChange={(e) => setPageNumberFormat(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl border border-gray-300 text-sm outline-none focus:border-red-500"
-                    >
-                      <option value="page_of_total">Page X of Y</option>
-                      <option value="page_only">Page X</option>
-                      <option value="dash">- X -</option>
-                    </select>
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                    {/* Controls Column */}
+                    <div className="lg:col-span-7 space-y-6">
+                      {/* Visual Position Matrix */}
+                      <div>
+                        <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">
+                          Page Number Position
+                        </label>
+                        <p className="text-xs text-gray-500 mb-3">
+                          Select the exact location on the page where numbers should appear.
+                        </p>
+                        <div className="grid grid-cols-3 gap-2.5 max-w-md">
+                          {[
+                            { id: "top-left", label: "Top Left" },
+                            { id: "top-center", label: "Top Center" },
+                            { id: "top-right", label: "Top Right" },
+                            { id: "bottom-left", label: "Bottom Left" },
+                            { id: "bottom-center", label: "Bottom Center" },
+                            { id: "bottom-right", label: "Bottom Right" },
+                          ].map((pos) => {
+                            const isCurrent = pageNumberPosition === pos.id;
+                            return (
+                              <button
+                                key={pos.id}
+                                type="button"
+                                onClick={() => setPageNumberPosition(pos.id)}
+                                className={`flex items-center justify-center py-2.5 px-3 rounded-xl border-2 text-xs font-bold transition-all ${
+                                  isCurrent
+                                    ? "border-red-600 bg-red-50/50 text-red-700 ring-2 ring-red-100 shadow-2xs"
+                                    : "border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50"
+                                }`}
+                              >
+                                {pos.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Format and Start Page */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-gray-700 mb-1.5">Numbering Format</label>
+                          <select
+                            value={pageNumberFormat}
+                            onChange={(e) => setPageNumberFormat(e.target.value)}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-gray-300 text-sm font-medium outline-none focus:border-red-500 bg-white"
+                          >
+                            <option value="page_of_total">Page 1 of 10</option>
+                            <option value="page_only">1</option>
+                            <option value="dash">- 1 -</option>
+                            <option value="page_num">Page 1</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-gray-700 mb-1.5">First Page Number</label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={pageNumberStartPage}
+                            onChange={(e) => setPageNumberStartPage(Math.max(1, parseInt(e.target.value) || 1))}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-gray-300 text-sm font-medium outline-none focus:border-red-500 bg-white"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Margin, Font Size & Color */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-gray-100">
+                        <div>
+                          <label className="block text-xs font-bold text-gray-700 mb-1.5">Margin</label>
+                          <div className="flex items-center gap-1">
+                            {[
+                              { label: "Small", val: 18 },
+                              { label: "Normal", val: 36 },
+                              { label: "Wide", val: 54 },
+                            ].map((m) => (
+                              <button
+                                key={m.label}
+                                type="button"
+                                onClick={() => setPageNumberMargin(m.val)}
+                                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                                  pageNumberMargin === m.val
+                                    ? "bg-red-600 text-white"
+                                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                }`}
+                              >
+                                {m.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <label className="text-xs font-bold text-gray-700">Font Size ({pageNumberFontSize}pt)</label>
+                          </div>
+                          <input
+                            type="range"
+                            min="8"
+                            max="20"
+                            step="1"
+                            value={pageNumberFontSize}
+                            onChange={(e) => setPageNumberFontSize(Number(e.target.value))}
+                            className="w-full accent-red-600 mt-2"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-gray-700 mb-1.5">Color</label>
+                          <div className="flex items-center gap-2 mt-1">
+                            <input
+                              type="color"
+                              value={pageNumberColor}
+                              onChange={(e) => setPageNumberColor(e.target.value)}
+                              className="w-8 h-8 rounded-lg cursor-pointer border border-gray-300 p-0.5"
+                            />
+                            <div className="flex items-center gap-1">
+                              {["#333333", "#000000", "#DC2626", "#1D4ED8"].map((c) => (
+                                <button
+                                  key={c}
+                                  type="button"
+                                  onClick={() => setPageNumberColor(c)}
+                                  style={{ backgroundColor: c }}
+                                  className={`w-5 h-5 rounded-full border ${
+                                    pageNumberColor === c ? "ring-2 ring-red-500 ring-offset-1" : "border-gray-200"
+                                  }`}
+                                  title={c}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Live Visual Preview Column */}
+                    <div className="lg:col-span-5 bg-gray-50 border border-gray-200 rounded-2xl p-5 flex flex-col items-center">
+                      <div className="flex items-center justify-between w-full mb-3">
+                        <span className="text-xs font-bold text-gray-700 flex items-center gap-1.5">
+                          <Eye className="w-3.5 h-3.5 text-red-500" />
+                          Live Placement Preview
+                        </span>
+                        <span className="text-[10px] text-gray-400">Position: {pageNumberPosition}</span>
+                      </div>
+
+                      {/* Simulated Document Sheet */}
+                      <div className="relative w-full max-w-[220px] aspect-[1/1.414] bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden flex flex-col justify-between p-4 select-none">
+                        {/* Simulated text lines */}
+                        <div className="space-y-2 opacity-25 pointer-events-none mt-2">
+                          <div className="h-2 bg-gray-400 rounded w-1/2" />
+                          <div className="h-1 bg-gray-300 rounded w-full" />
+                          <div className="h-1 bg-gray-300 rounded w-5/6" />
+                          <div className="h-1 bg-gray-300 rounded w-4/5" />
+                          <div className="h-1 bg-gray-300 rounded w-full" />
+                          <div className="h-1 bg-gray-300 rounded w-3/4" />
+                        </div>
+
+                        {/* Stamped Numbering Preview Badge */}
+                        <div
+                          style={{ color: pageNumberColor }}
+                          className={`absolute font-bold text-[10px] tracking-tight pointer-events-none transition-all ${
+                            pageNumberPosition === "top-left"
+                              ? "top-3 left-4 text-left"
+                              : pageNumberPosition === "top-center"
+                              ? "top-3 inset-x-0 text-center"
+                              : pageNumberPosition === "top-right"
+                              ? "top-3 right-4 text-right"
+                              : pageNumberPosition === "bottom-left"
+                              ? "bottom-3 left-4 text-left"
+                              : pageNumberPosition === "bottom-center"
+                              ? "bottom-3 inset-x-0 text-center"
+                              : "bottom-3 right-4 text-right"
+                          }`}
+                        >
+                          <span className="bg-red-50/80 px-1.5 py-0.5 rounded border border-red-200 text-red-700">
+                            {pageNumberFormat === "page_of_total"
+                              ? `Page ${pageNumberStartPage} of 10`
+                              : pageNumberFormat === "page_only"
+                              ? `${pageNumberStartPage}`
+                              : pageNumberFormat === "dash"
+                              ? `- ${pageNumberStartPage} -`
+                              : `Page ${pageNumberStartPage}`}
+                          </span>
+                        </div>
+                      </div>
+
+                      <p className="text-[11px] text-gray-500 text-center mt-3 font-medium">
+                        Stamped at <strong className="text-gray-800">{pageNumberPosition}</strong> with {pageNumberMargin}pt margin
+                      </p>
+                    </div>
                   </div>
                 </div>
               )}
@@ -946,6 +1397,21 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
               )}
 
               {/* 3. Convert Options */}
+              {tool.id === "docu-to-pdf" && docuMode === "upload" && (
+                <div className="space-y-4 max-w-md">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Custom Manual Title</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. My Documentation Manual"
+                      value={docuTitle}
+                      onChange={(e) => setDocuTitle(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-xl border border-gray-300 text-sm outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+              )}
+
               {tool.id === "jpg-to-pdf" && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-md">
                   <div>
@@ -1134,17 +1600,25 @@ export default function ToolRunner({ tool }: ToolRunnerProps) {
                   type="button"
                   onClick={handleProcess}
                   disabled={loading}
-                  className="flex items-center gap-2 px-8 py-4 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-extrabold text-base rounded-2xl shadow-lg hover:shadow-red-500/25 transition-all group"
+                  className={`flex items-center gap-2 px-8 py-4 disabled:opacity-50 text-white font-extrabold text-base rounded-2xl shadow-lg transition-all group ${
+                    tool.id === "docu-to-pdf"
+                      ? "bg-indigo-600 hover:bg-indigo-700 shadow-indigo-500/25"
+                      : "bg-red-600 hover:bg-red-700 shadow-red-500/25"
+                  }`}
                 >
                   {loading ? (
                     <>
                       <Loader2 className="w-5 h-5 animate-spin" />
-                      <span>Processing document with PDFly...</span>
+                      <span>
+                        {tool.id === "docu-to-pdf"
+                          ? "Generating Documentation Manual with Docu..."
+                          : "Processing document with PDFly..."}
+                      </span>
                     </>
                   ) : (
                     <>
                       <Sparkles className="w-5 h-5" />
-                      <span>{tool.title}</span>
+                      <span>{tool.id === "docu-to-pdf" ? "Generate PDF Manual" : tool.title}</span>
                     </>
                   )}
                 </button>

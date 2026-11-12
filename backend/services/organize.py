@@ -202,53 +202,84 @@ def rotate_pdf(
 
 def add_page_numbers(
     file_path: Path,
-    position: str = "bottom-center",
+    position: str = "bottom-right",
     format_type: str = "page_of_total",
     start_page: int = 1,
     font_size: float = 10.0,
     margin: float = 36.0,
+    color_hex: str = "#333333",
     output_path: Path = None
 ) -> Path:
     doc = pymupdf.open(file_path)
     total_pages = len(doc)
-    
+
+    hex_clean = color_hex.lstrip("#")
+    if len(hex_clean) == 6:
+        r, g, b = tuple(int(hex_clean[i:i+2], 16) / 255.0 for i in (0, 2, 4))
+    else:
+        r, g, b = (0.2, 0.2, 0.2)
+
     for idx, page in enumerate(doc):
         rect = page.rect
         curr_page = idx + start_page
-        
+
         if format_type == "page_of_total":
             text = f"Page {curr_page} of {total_pages}"
         elif format_type == "page_only":
             text = f"{curr_page}"
         elif format_type == "dash":
             text = f"- {curr_page} -"
+        elif format_type == "page_num":
+            text = f"Page {curr_page}"
         else:
             text = f"{curr_page}"
-            
-        text_width = pymupdf.get_text_length(text, fontname="helv", fontsize=font_size)
-        
-        # Determine X position
-        if "left" in position:
-            x = margin
-        elif "right" in position:
-            x = rect.width - margin - text_width
-        else: # center
-            x = (rect.width - text_width) / 2
-            
-        # Determine Y position
-        if "top" in position:
-            y = margin + font_size
-        else: # bottom
-            y = rect.height - margin
-            
-        page.insert_text(
-            pymupdf.Point(x, y),
+
+        box_width = 180.0
+        box_height = max(font_size * 2.2, 24.0)
+        pos_clean = position.lower()
+
+        # Compute horizontal placement on visible page
+        if "left" in pos_clean:
+            x0 = rect.x0 + margin
+            x1 = x0 + box_width
+            align = pymupdf.TEXT_ALIGN_LEFT
+        elif "center" in pos_clean and "right" not in pos_clean and "left" not in pos_clean:
+            x0 = rect.x0 + (rect.width - box_width) / 2.0
+            x1 = x0 + box_width
+            align = pymupdf.TEXT_ALIGN_CENTER
+        else:  # right (default)
+            x1 = rect.x1 - margin
+            x0 = x1 - box_width
+            align = pymupdf.TEXT_ALIGN_RIGHT
+
+        # Compute vertical placement on visible page
+        if "top" in pos_clean:
+            y0 = rect.y0 + margin
+            y1 = y0 + box_height
+        elif "middle" in pos_clean:
+            y0 = rect.y0 + (rect.height - box_height) / 2.0
+            y1 = y0 + box_height
+        else:  # bottom (default)
+            y1 = rect.y1 - margin
+            y0 = y1 - box_height
+
+        vis_box = pymupdf.Rect(x0, y0, x1, y1)
+
+        # De-rotate to unrotated page coordinate space
+        unrotated_box = vis_box * page.derotation_matrix
+
+        # Insert textbox with exact page rotation
+        page.insert_textbox(
+            unrotated_box,
             text,
             fontsize=font_size,
             fontname="helv",
-            color=(0.2, 0.2, 0.2)
+            color=(r, g, b),
+            align=align,
+            rotate=page.rotation,
+            overlay=True
         )
-        
+
     doc.save(output_path, garbage=3, deflate=True)
     doc.close()
     return output_path
